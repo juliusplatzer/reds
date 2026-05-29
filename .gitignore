@@ -1,0 +1,16 @@
+# Build output
+/build/
+*.exe
+
+# Go
+/vendor/
+
+# Environment
+.env
+
+# Java / Maven
+swim/smes/target/
+
+# macOS
+.DS_Store
+__MACOSX/
