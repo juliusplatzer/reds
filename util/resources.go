@@ -81,13 +81,29 @@ func isProjectRoot(path string) bool {
 	return false
 }
 
+func findProjectRootFrom(path string) (string, bool) {
+	if path == "" {
+		return "", false
+	}
+	for {
+		if isProjectRoot(path) {
+			return path, true
+		}
+		parent := filepath.Dir(path)
+		if parent == path {
+			return "", false
+		}
+		path = parent
+	}
+}
+
 // FindProjectRoot returns the project root directory, cached after first call.
 // Falls back to the current working directory if no marker is found.
 func FindProjectRoot() string {
 	rootOnce.Do(func() {
 		for _, c := range candidateRoots() {
-			if isProjectRoot(c) {
-				rootDir = c
+			if root, ok := findProjectRootFrom(c); ok {
+				rootDir = root
 				return
 			}
 		}
