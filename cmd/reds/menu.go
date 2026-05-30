@@ -65,7 +65,7 @@ type menu struct {
 }
 
 // newMenu loads the facility list, mirroring loadAsdexAirports(): every
-// *.geojson.gz under resources/videomaps/asdex, reduced to its ICAO prefix.
+// *.geojson.zst under resources/videomaps/asdex, reduced to its ICAO prefix.
 func newMenu() *menu {
 	return &menu{
 		airports:   loadAsdexAirports(),
@@ -85,7 +85,7 @@ func loadAsdexAirports() []string {
 			continue
 		}
 		name := e.Name()
-		if !strings.HasSuffix(name, ".geojson.gz") {
+		if !strings.HasSuffix(name, ".geojson.zst") {
 			continue
 		}
 		// Take the text before the first '.', matching the C++ logic.
@@ -94,7 +94,33 @@ func loadAsdexAirports() []string {
 		}
 	}
 	sort.Strings(icaos)
-	return icaos
+	if len(icaos) <= 1 {
+		return icaos
+	}
+	unique := icaos[:0]
+	for _, icao := range icaos {
+		if len(unique) == 0 || unique[len(unique)-1] != icao {
+			unique = append(unique, icao)
+		}
+	}
+	return unique
+}
+
+func (m *menu) currentSelection() (Selection, bool) {
+	if len(m.airports) == 0 {
+		return Selection{Mode: DisplayASDEX}, false
+	}
+	if m.facilityIndex < 0 {
+		m.facilityIndex = 0
+	}
+	if m.facilityIndex >= len(m.airports) {
+		m.facilityIndex = len(m.airports) - 1
+	}
+
+	return Selection{
+		Mode:    DisplayMode(m.displayIndex), // ASDE-X today
+		Airport: m.airports[m.facilityIndex],
+	}, true
 }
 
 // draw renders one frame of the menu and returns whether it is still pending,
@@ -164,9 +190,11 @@ func (m *menu) draw(displaySize [2]float32) menuResult {
 	}
 
 	if result == menuConfirmed {
-		m.selection = Selection{
-			Mode:    DisplayMode(m.displayIndex), // ASDE-X today
-			Airport: m.airports[m.facilityIndex],
+		selection, ok := m.currentSelection()
+		if !ok {
+			result = menuPending
+		} else {
+			m.selection = selection
 		}
 	}
 

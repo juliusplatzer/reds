@@ -36,9 +36,6 @@ func disposeSVGIcons() {
 	if chevronIcon.texture != 0 {
 		gl.DeleteTextures(1, &chevronIcon.texture)
 	}
-	if chevronIcon.ref != nil {
-		chevronIcon.ref.Destroy()
-	}
 	chevronIcon = nil
 }
 

@@ -1,9 +1,7 @@
 // cmd/reds/main.go
 //
 // reds entrypoint. Opens a GLFW + Dear ImGui window, shows the startup menu
-// (a port of the Qt launcher), and on Confirm will hand the Selection to the
-// chosen scope. The scope dispatch is a stub for now — this milestone is just
-// the menu and the platform layer underneath it.
+// and dispatches to the selected scope once Confirm is pressed.
 
 package main
 
@@ -11,13 +9,23 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/juliusplatzer/reds/asdex"
+	"github.com/juliusplatzer/reds/panes"
 	"github.com/juliusplatzer/reds/platform"
+	"github.com/juliusplatzer/reds/renderer"
 
 	"github.com/AllenDang/cimgui-go/imgui"
 	implogl3 "github.com/AllenDang/cimgui-go/impl/opengl3"
 )
 
 const uiFontSize = 18 // logical px
+
+type appMode int
+
+const (
+	appModeMenu appMode = iota
+	appModeScope
+)
 
 func main() {
 	// ImGui context must exist before the platform touches CurrentIO().
@@ -26,7 +34,7 @@ func main() {
 	imgui.CurrentIO().SetIniFilename("") // no imgui.ini side file
 
 	plat, err := platform.New(&platform.Config{
-		Title:             "nascope",
+		Title:             "reds",
 		InitialWindowSize: [2]int{200, 350},
 		MinWindowSize:     [2]int{200, 200},
 		Resizable:         true,
@@ -36,6 +44,13 @@ func main() {
 		os.Exit(1)
 	}
 	defer plat.Dispose()
+
+	r := renderer.NewOpenGLRenderer()
+	if err := r.Init(); err != nil {
+		fmt.Fprintf(os.Stderr, "reds: renderer init failed: %v\n", err)
+		os.Exit(1)
+	}
+	defer r.Dispose()
 
 	loadFont()
 	if err := initSVGIcons(); err != nil {
@@ -48,33 +63,57 @@ func main() {
 		fmt.Fprintln(os.Stderr, "reds: no ASDE-X facilities found under resources/videomaps/asdex")
 	}
 
+	mode := appModeMenu
+	var active panes.Pane
+
 	bg := colDialogBg
 	for !plat.ShouldStop() {
 		plat.ProcessEvents()
 		plat.NewFrame()
 		imgui.NewFrame()
 
-		res := m.draw(plat.DisplaySize())
+		switch mode {
+		case appModeMenu:
+			res := m.draw(plat.DisplaySize())
+			imgui.Render()
+			plat.Clear(bg.X, bg.Y, bg.Z)
+			implogl3.RenderDrawData(imgui.CurrentDrawData())
+			plat.PostRender()
 
-		imgui.Render()
-		plat.Clear(bg.X, bg.Y, bg.Z)
-		implogl3.RenderDrawData(imgui.CurrentDrawData())
-		plat.PostRender()
+			switch res {
+			case menuConfirmed:
+				pane, err := launchScope(m.selection, plat)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "reds: %v\n", err)
+					plat.SetWindowTitle("reds")
+					continue
+				}
+				active = pane
+				mode = appModeScope
+			case menuCancelled:
+				return
+			}
 
-		switch res {
-		case menuConfirmed:
-			onConfirm(m.selection)
-			return
-		case menuCancelled:
-			return
+		case appModeScope:
+			io := imgui.CurrentIO()
+			panes.DrawPane(active, plat, r, panes.DrawOptions{
+				MouseCaptured:    io.WantCaptureMouse(),
+				KeyboardCaptured: io.WantCaptureKeyboard(),
+			})
+
+			imgui.Render()
+			implogl3.RenderDrawData(imgui.CurrentDrawData())
+			plat.PostRender()
 		}
 	}
 }
 
-// onConfirm is where the scope launch will go. For now it reports the choice;
-// later it dispatches to the ASDE-X / STARS / ERAM scope in-process.
-func onConfirm(sel Selection) {
-	fmt.Fprintf(os.Stderr, "reds: selected %s / %s (scope launch not yet implemented)\n",
-		sel.Mode, sel.Airport)
-	// TODO: launch the selected scope here.
+func launchScope(sel Selection, plat platform.Platform) (panes.Pane, error) {
+	switch sel.Mode {
+	case DisplayASDEX:
+		plat.SetWindowTitle("REDS ASDE-X " + sel.Airport)
+		return asdex.NewPane(sel.Airport)
+	default:
+		return nil, fmt.Errorf("%s scope is not implemented yet", sel.Mode)
+	}
 }
