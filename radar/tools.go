@@ -20,8 +20,9 @@ type ScopeTransformations struct {
 }
 
 // GetScopeTransformations returns transformations for a scope view. rangeFeet
-// is half the visible world height, matching VICE's range semantics. Rotation
-// is retained for future ASDE-X ROTATE support but is not applied yet.
+// is half the visible world height. Rotation is retained for future ASDE-X ROTATE
+//
+//	support but is not applied yet.
 func GetScopeTransformations(
 	paneExtent redsmath.Rect,
 	center redsmath.Vec2,
