@@ -1,8 +1,5 @@
 #!/usr/bin/env bash
-# Build (and run) reds. Kept as a shell script for now; a Windows/.exe build
-# path can come later. Unlike the old Qt build.sh, the menu no longer prints a
-# selected airport for the script to capture — selection is handled in-process,
-# so this just builds the Go binary and the SMES reader, then launches reds.
+# Build reds and its SWIM/Solace target reader, then run the menu.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
@@ -14,14 +11,24 @@ if [[ -f .env ]]; then
     set +o allexport
 fi
 
+WS_PORT="${WS_PORT:-8080}"
+export WS_PORT
+
+mkdir -p build
+
 echo "[build] Building reds (Go frontend)..." >&2
 go build -o build/reds ./cmd/reds
 
 echo "[build] Building SMES reader..." >&2
 mvn -q -f swim/smes/pom.xml package
 
-# NOTE: the SWIM/Solace consumer is no longer started here. Once Confirm wires
-# up the scopes, the selected airport will start the consumer in-process.
+STALE_PIDS="$(lsof -ti "tcp:${WS_PORT}" -sTCP:LISTEN 2>/dev/null || true)"
+if [[ -n "$STALE_PIDS" ]]; then
+    echo "[run] Killing stale listener(s) on :$WS_PORT - $STALE_PIDS" >&2
+    kill $STALE_PIDS 2>/dev/null || true
+    sleep 0.3
+    kill -9 $STALE_PIDS 2>/dev/null || true
+fi
 
 echo "[run] Launching reds..." >&2
-exec ./build/reds
+./build/reds

@@ -16,7 +16,7 @@ public record SurfaceTarget(
         boolean isFull,     // from positionReport[@full="true"]
 
         // Identity
-        String  tgtType,    // "aircraft" or "unknown"
+        String  tgtType,    // "aircraft", "vehicle", or "unknown"
         String  callsign,   // flightId/aircraftId (UNKN filtered out)
         String  acType,     // flightInfo/acType
         String  squawk,     // flightId/mode3ACode

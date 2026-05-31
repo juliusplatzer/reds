@@ -51,7 +51,7 @@ public final class TargetStore extends AbstractVerticle {
             Set<String> newActive = filter.update(msg.body());
             pruneToFilter(newActive);
             snapshotTo(newActive);
-            System.out.println("[Store] Airport filter → " + (newActive.isEmpty() ? "all" : newActive)
+            System.out.println("[Store] Airport filter → " + (newActive.isEmpty() ? "none" : newActive)
                     + " (" + store.size() + " targets retained)");
         });
 
@@ -77,7 +77,7 @@ public final class TargetStore extends AbstractVerticle {
         Instant now = Instant.now();
         for (Map.Entry<String, TargetState> e : store.entrySet()) {
             TargetState s = e.getValue();
-            if (!active.isEmpty() && (s.airport == null || !active.contains(s.airport))) continue;
+            if (s.airport == null || !active.contains(s.airport)) continue;
 
             JsonObject changed = new JsonObject();
             if (s.tgtType  != null) changed.put("tgtType",  s.tgtType);
@@ -109,7 +109,6 @@ public final class TargetStore extends AbstractVerticle {
      * removal diffs so the UI can clean up without waiting for TTL eviction.
      */
     private void pruneToFilter(Set<String> newActive) {
-        if (newActive.isEmpty()) return;
         store.entrySet().removeIf(entry -> {
             String airport = entry.getValue().airport;
             if (airport != null && newActive.contains(airport)) return false;
