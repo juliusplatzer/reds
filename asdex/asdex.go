@@ -3,9 +3,11 @@ package asdex
 import (
 	"fmt"
 	stdmath "math"
+	"os"
 	"strings"
 
 	redsmath "github.com/juliusplatzer/reds/math"
+	redsnet "github.com/juliusplatzer/reds/net"
 	"github.com/juliusplatzer/reds/panes"
 	"github.com/juliusplatzer/reds/platform"
 	"github.com/juliusplatzer/reds/radar"
@@ -58,6 +60,7 @@ type ASDEXPane struct {
 	mode     Mode
 	videomap *VideoMap
 	targets  TargetStore
+	smes     *redsnet.SmesClient
 
 	center          redsmath.Vec2
 	rangeFeet       float32
@@ -76,11 +79,16 @@ func NewPane(airport string) (*ASDEXPane, error) {
 		return nil, err
 	}
 
+	client := redsnet.NewSmesClient(targetWebSocketURL())
+	client.SetAirport(airport)
+	client.Start()
+
 	return &ASDEXPane{
 		airport:  airport,
 		mode:     ModeDay,
 		videomap: vm,
 		targets:  NewTargetStore(),
+		smes:     client,
 	}, nil
 }
 
@@ -89,6 +97,7 @@ func (p *ASDEXPane) Draw(ctx *panes.Context, zcb *renderer.ZCmdBuffer) {
 		return
 	}
 
+	p.consumeNetworkFrames()
 	p.initView(ctx.PaneRect)
 	if !p.viewInitialized {
 		return
@@ -135,6 +144,38 @@ func (p *ASDEXPane) Draw(ctx *panes.Context, zcb *renderer.ZCmdBuffer) {
 		},
 	)
 	targetCB.DisableScissor()
+}
+
+func targetWebSocketURL() string {
+	if value := os.Getenv("REDS_TARGET_WS_URL"); value != "" {
+		return value
+	}
+	if value := os.Getenv("NASCOPE_TARGET_WS_URL"); value != "" {
+		return value
+	}
+	port := os.Getenv("WS_PORT")
+	if port == "" {
+		port = "8080"
+	}
+	return "ws://localhost:" + port + "/ws"
+}
+
+func (p *ASDEXPane) consumeNetworkFrames() {
+	if p == nil || p.smes == nil {
+		return
+	}
+
+	for {
+		select {
+		case frame := <-p.smes.Frames():
+			if !frame.Removed && frame.Airport != "" && !strings.EqualFold(frame.Airport, p.airport) {
+				continue
+			}
+			p.targets.ApplySmesFrame(frame, p.videomap)
+		default:
+			return
+		}
+	}
 }
 
 func (p *ASDEXPane) initView(rect redsmath.Rect) {

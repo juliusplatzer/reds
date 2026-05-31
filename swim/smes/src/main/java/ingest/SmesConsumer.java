@@ -210,11 +210,11 @@ public final class SmesConsumer extends AbstractVerticle {
         }
 
         // Flight info
-        String tgtType = "unknown", acType = null, wake = null, exitFix = null;
+        String tgtType = isFull ? "unknown" : null, acType = null, wake = null, exitFix = null;
         Element flightInfo = child(el, "flightInfo");
         if (flightInfo != null) {
             String raw = blankToNull(text(child(flightInfo, "tgtType")));
-            tgtType = "aircraft".equalsIgnoreCase(raw) ? "aircraft" : "unknown";
+            if (raw != null || isFull) tgtType = normalizeTargetType(raw);
             acType = blankToNull(text(child(flightInfo, "acType")));
             if (acType == null) acType = blankToNull(text(child(flightInfo, "manualAircraftType")));
             wake    = blankToNull(text(child(flightInfo, "wake")));
@@ -276,7 +276,7 @@ public final class SmesConsumer extends AbstractVerticle {
         // adsbReports typically lack stid, flight info, and identity fields
         return new SurfaceTarget(
                 airport, track, null, isFull,
-                "unknown", null, null, null, null, null, null, null,
+                isFull ? "unknown" : null, null, null, null, null, null, null, null,
                 lat, lon, altitude, speed, heading
         );
     }
@@ -313,6 +313,13 @@ public final class SmesConsumer extends AbstractVerticle {
     // -------------------------------------------------------------------------
 
     private static String blankToNull(String s) { return (s == null || s.isBlank()) ? null : s; }
+
+    private static String normalizeTargetType(String raw) {
+        if (raw == null) return "unknown";
+        if ("aircraft".equalsIgnoreCase(raw)) return "aircraft";
+        if ("vehicle".equalsIgnoreCase(raw) || "VEH".equalsIgnoreCase(raw)) return "vehicle";
+        return "unknown";
+    }
 
     private static String scratchpadToNull(String s) {
         s = blankToNull(s);

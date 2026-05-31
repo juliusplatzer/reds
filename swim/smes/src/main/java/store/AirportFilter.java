@@ -14,7 +14,7 @@ import java.util.Set;
  * airports outside this set are discarded before any merge or diff work begins.
  *
  * <ul>
- *   <li>Empty active set — accept all (default; no filter until UI connects).</li>
+ *   <li>Empty active set — accept none until the UI selects an airport.</li>
  *   <li>Non-empty active set — only listed airports pass through.</li>
  * </ul>
  *
@@ -36,7 +36,7 @@ public final class AirportFilter {
      */
     public boolean accepts(String airport) {
         Set<String> a = active;
-        return a.isEmpty() || (airport != null && a.contains(airport));
+        return airport != null && a.contains(airport);
     }
 
     /**

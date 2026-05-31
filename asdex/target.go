@@ -1,9 +1,12 @@
 package asdex
 
 import (
+	"encoding/json"
 	stdmath "math"
+	"strings"
 
 	redsmath "github.com/juliusplatzer/reds/math"
+	redsnet "github.com/juliusplatzer/reds/net"
 	"github.com/juliusplatzer/reds/renderer"
 )
 
@@ -172,6 +175,172 @@ func (s *TargetStore) ApplyDelta(delta TargetDelta) {
 		return
 	}
 	s.Upsert(delta.Target)
+}
+
+func (s *TargetStore) ApplySmesFrame(frame redsnet.SmesFrame, vm *VideoMap) {
+	if s == nil || frame.Key == "" {
+		return
+	}
+	if frame.Removed {
+		s.Remove(frame.Key)
+		return
+	}
+
+	target := Target{
+		ID:     frame.Key,
+		ShowDB: true,
+	}
+	if existing := s.targets[frame.Key]; existing != nil {
+		target = *existing
+	}
+
+	applySmesChanged(&target, frame.Changed, vm)
+	s.Upsert(target)
+}
+
+func applySmesChanged(target *Target, changed map[string]json.RawMessage, vm *VideoMap) {
+	if target == nil {
+		return
+	}
+
+	if value, present, clear := changedString(changed, "callsign"); present {
+		target.Callsign = clearedString(value, clear)
+	}
+	if value, present, clear := changedString(changed, "squawk"); present {
+		target.Beacon = clearedString(value, clear)
+	}
+	if value, present, clear := changedString(changed, "exitFix"); present {
+		target.Fix = clearedString(value, clear)
+	}
+	if value, present, clear := changedString(changed, "wake"); present {
+		target.CWT = clearedString(value, clear)
+	}
+	if value, present, clear := changedString(changed, "scratchpad1"); present {
+		target.Scratchpad1 = normalizeScratchpad(clearedString(value, clear))
+	}
+	if value, present, clear := changedString(changed, "scratchpad2"); present {
+		target.Scratchpad2 = normalizeScratchpad(clearedString(value, clear))
+	}
+
+	if value, present, clear := changedString(changed, "acType"); present {
+		if clear || value == "" {
+			target.TargetType = nil
+		} else {
+			target.TargetType = stringPointer(value)
+		}
+	}
+	if value, present, clear := changedString(changed, "tgtType"); present {
+		switch {
+		case clear:
+			target.TargetType = nil
+		case strings.EqualFold(value, "vehicle"), strings.EqualFold(value, "VEH"):
+			target.TargetType = stringPointer("VEH")
+		case strings.EqualFold(value, "unknown") && target.TargetType == nil:
+			target.TargetType = nil
+		}
+	}
+
+	positionChanged := false
+	if value, present, clear := changedFloat64(changed, "lat"); present {
+		positionChanged = true
+		if clear {
+			target.Lat = 0
+		} else {
+			target.Lat = value
+		}
+	}
+	if value, present, clear := changedFloat64(changed, "lon"); present {
+		positionChanged = true
+		if clear {
+			target.Lon = 0
+		} else {
+			target.Lon = value
+		}
+	}
+	if positionChanged {
+		target.PosFeet = redsmath.Vec2{}
+		if vm != nil && target.Lat != 0 && target.Lon != 0 {
+			target.PosFeet = vm.LonLatToFeet(target.Lon, target.Lat)
+		}
+	}
+
+	if value, present, clear := changedFloat64(changed, "altitude"); present {
+		if clear {
+			target.AltitudeFt = 0
+			target.HasAltitude = false
+		} else {
+			target.AltitudeFt = int(stdmath.Round(value))
+			target.HasAltitude = true
+		}
+	}
+	if value, present, clear := changedFloat64(changed, "speed"); present {
+		if clear {
+			target.GroundSpeedKt = 0
+		} else {
+			target.GroundSpeedKt = float32(value)
+		}
+	}
+	if value, present, clear := changedFloat64(changed, "heading"); present {
+		if clear {
+			target.HeadingDeg = 0
+		} else {
+			target.HeadingDeg = float32(value)
+		}
+	}
+}
+
+func changedString(changed map[string]json.RawMessage, key string) (string, bool, bool) {
+	raw, present := changed[key]
+	if !present {
+		return "", false, false
+	}
+	if isJSONNull(raw) {
+		return "", true, true
+	}
+
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return "", false, false
+	}
+	return value, true, false
+}
+
+func changedFloat64(changed map[string]json.RawMessage, key string) (float64, bool, bool) {
+	raw, present := changed[key]
+	if !present {
+		return 0, false, false
+	}
+	if isJSONNull(raw) {
+		return 0, true, true
+	}
+
+	var value float64
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return 0, false, false
+	}
+	return value, true, false
+}
+
+func isJSONNull(raw json.RawMessage) bool {
+	return string(raw) == "null"
+}
+
+func clearedString(value string, clear bool) string {
+	if clear {
+		return ""
+	}
+	return value
+}
+
+func normalizeScratchpad(value string) string {
+	if strings.EqualFold(strings.TrimSpace(value), "none") {
+		return ""
+	}
+	return value
+}
+
+func stringPointer(value string) *string {
+	return &value
 }
 
 type TargetDrawOptions struct {

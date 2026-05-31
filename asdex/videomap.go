@@ -112,6 +112,15 @@ func (vm *VideoMap) AnchorLonLat() redsmath.Vec2 {
 	}
 	return vm.anchor
 }
+func (vm *VideoMap) LonLatToFeet(lon, lat float64) redsmath.Vec2 {
+	if vm == nil {
+		return redsmath.Vec2{}
+	}
+	return lonLatToFeet(vm.anchor)(redsmath.Vec2{
+		X: float32(lon),
+		Y: float32(lat),
+	})
+}
 func (vm *VideoMap) Meshes() []VideoMapMesh {
 	if vm == nil {
 		return nil
