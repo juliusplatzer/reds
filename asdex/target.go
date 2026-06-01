@@ -51,8 +51,9 @@ type Target struct {
 
 	ShowDB bool
 
-	Suspended bool
-	Coasting  bool
+	Suspended   bool
+	Coasting    bool
+	Highlighted bool
 }
 
 func (t *Target) EffectiveShowDB() bool {
@@ -153,6 +154,51 @@ func (s *TargetStore) History() map[string][]TargetHistoryPoint {
 		return nil
 	}
 	return s.history
+}
+
+const maxTargetHoverRangeFeet = float32(150)
+
+func (s *TargetStore) HighlightNearest(posFeet redsmath.Vec2) string {
+	if s == nil || len(s.targets) == 0 {
+		return ""
+	}
+
+	maxDistance2 := maxTargetHoverRangeFeet * maxTargetHoverRangeFeet
+	bestDistance2 := maxDistance2
+	bestID := ""
+
+	for _, id := range s.order {
+		target := s.targets[id]
+		if target == nil {
+			continue
+		}
+
+		target.Highlighted = false
+
+		delta := target.PosFeet.Sub(posFeet)
+		distance2 := delta.X*delta.X + delta.Y*delta.Y
+		if distance2 <= bestDistance2 {
+			bestDistance2 = distance2
+			bestID = target.ID
+		}
+	}
+
+	if target := s.targets[bestID]; target != nil {
+		target.Highlighted = true
+	}
+	return bestID
+}
+
+func (s *TargetStore) ClearHighlight() {
+	if s == nil {
+		return
+	}
+
+	for _, target := range s.targets {
+		if target != nil {
+			target.Highlighted = false
+		}
+	}
 }
 
 func (s *TargetStore) trimHistory(id string) {
@@ -368,6 +414,7 @@ func DrawTargets(
 	}
 
 	addHistoryDots(targets, history, cb, opts)
+	addHighlightRings(targets, cb, opts.Brightness)
 	addTargetSymbols(targets, cb, opts.Brightness)
 	addTargetVectors(targets, cb, opts)
 }
@@ -544,6 +591,26 @@ var unknownMesh = polygonMesh{
 	Indices:  triangleFanIndices(len(unknownPolygon)),
 }
 
+const highlightRingRadiusFeet = 0.012 * feetPerNM
+
+var highlightRingPolygon = regularRingPolygon(20, highlightRingRadiusFeet)
+
+func regularRingPolygon(sides int, radiusFeet float32) []redsmath.Vec2 {
+	if sides < 3 || radiusFeet <= 0 {
+		return nil
+	}
+
+	points := make([]redsmath.Vec2, 0, sides+1)
+	for i := 0; i <= sides; i++ {
+		radians := float64(i) / float64(sides) * 2 * stdmath.Pi
+		points = append(points, redsmath.Vec2{
+			X: radiusFeet * float32(stdmath.Cos(radians)),
+			Y: radiusFeet * float32(stdmath.Sin(radians)),
+		})
+	}
+	return points
+}
+
 func scaledPolygon(points []redsmath.Vec2) []redsmath.Vec2 {
 	out := make([]redsmath.Vec2, len(points))
 	for i, point := range points {
@@ -577,6 +644,33 @@ func triangleFanIndices(vertexCount int) []uint32 {
 		indices = append(indices, 0, uint32(i), uint32(i+1))
 	}
 	return indices
+}
+
+func addHighlightRings(targets []*Target, cb *renderer.CmdBuffer, brightness int) {
+	builder := renderer.GetLinesBuilder()
+	defer renderer.ReturnLinesBuilder(builder)
+
+	for _, target := range targets {
+		if target == nil || !target.Highlighted || target.Suspended {
+			continue
+		}
+
+		scale := float32(1)
+		if classifyTarget(target) == targetClassHeavyAircraft {
+			scale = 1.5
+		}
+
+		points := make([]renderer.PointVertex, 0, len(highlightRingPolygon))
+		for _, point := range highlightRingPolygon {
+			position := target.PosFeet.Add(point.Mul(scale))
+			points = append(points, renderer.PointVertex{X: position.X, Y: position.Y})
+		}
+		builder.AddLineStrip(points)
+	}
+
+	cb.SetRGB(targetRGB(targetRGBHighlight, brightness))
+	cb.LineWidth(1)
+	builder.GenerateCommands(cb)
 }
 
 func addTargetSymbols(targets []*Target, cb *renderer.CmdBuffer, brightness int) {

@@ -65,6 +65,8 @@ type ASDEXPane struct {
 
 	datablockSettings DataBlockSettings
 
+	highlightedTargetID string
+
 	center          redsmath.Vec2
 	rangeFeet       float32
 	rotation        float32
@@ -130,6 +132,7 @@ func (p *ASDEXPane) Draw(ctx *panes.Context, zcb *renderer.ZCmdBuffer) {
 			p.rotation,
 		)
 	}
+	p.updateHighlightedTarget(ctx, transforms)
 
 	cb := zcb.At(windowZ(0, zVideoMap))
 	x, y, w, h := ctx.PaneFramebufferRect()
@@ -174,6 +177,34 @@ func (p *ASDEXPane) Draw(ctx *panes.Context, zcb *renderer.ZCmdBuffer) {
 		},
 	)
 	dbCB.DisableScissor()
+}
+
+func (p *ASDEXPane) updateHighlightedTarget(
+	ctx *panes.Context,
+	transforms radar.ScopeTransformations,
+) {
+	if p == nil || ctx == nil || ctx.Mouse == nil {
+		p.clearHighlightedTarget()
+		return
+	}
+
+	paneLocal := redsmath.RectFromSize(ctx.PaneRect.Width(), ctx.PaneRect.Height())
+	if !paneLocal.Contains(ctx.Mouse.Pos) {
+		p.clearHighlightedTarget()
+		return
+	}
+
+	mouseWorld := transforms.WorldFromWindowP(ctx.Mouse.Pos)
+	p.highlightedTargetID = p.targets.HighlightNearest(mouseWorld)
+}
+
+func (p *ASDEXPane) clearHighlightedTarget() {
+	if p == nil {
+		return
+	}
+
+	p.highlightedTargetID = ""
+	p.targets.ClearHighlight()
 }
 
 func targetWebSocketURL() string {
