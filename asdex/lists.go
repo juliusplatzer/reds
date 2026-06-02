@@ -3,7 +3,9 @@ package asdex
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
+	"time"
 
 	redsmath "github.com/juliusplatzer/reds/math"
 	"github.com/juliusplatzer/reds/renderer"
@@ -185,6 +187,500 @@ func (r RelativeScreenLocation) Location(
 	}
 
 	return out
+}
+
+type CoastListEntryStatus int
+
+const (
+	CoastListEntryCoasting CoastListEntryStatus = iota
+	CoastListEntrySuspended
+	CoastListEntryDropped
+)
+
+type CoastListEntry struct {
+	Status CoastListEntryStatus
+
+	TargetID string
+	TrackID  string
+
+	Callsign string
+	Beacon   string
+
+	TimeoutSeconds float64
+	Selected       bool
+}
+
+type CoastListEntryHitKind int
+
+const (
+	CoastListHitNone CoastListEntryHitKind = iota
+	CoastListHitHeader
+	CoastListHitEntry
+	CoastListHitUpArrow
+	CoastListHitDownArrow
+)
+
+type CoastListEntryHit struct {
+	Hit  bool
+	Kind CoastListEntryHitKind
+
+	TargetID string
+	TrackID  string
+	Status   CoastListEntryStatus
+}
+
+type CoastList struct {
+	visible  bool
+	expanded bool
+	offset   int
+
+	location RelativeScreenLocation
+	list     ScreenList
+
+	entries []CoastListEntry
+}
+
+func NewCoastList() CoastList {
+	size := redsmath.Vec2{X: 300, Y: 500}
+	defaultDisplay := redsmath.Vec2{X: 1300, Y: 900}
+	topLeft := redsmath.Vec2{X: 1000, Y: 150}
+
+	return CoastList{
+		visible:  true,
+		location: RelativeScreenLocationFromTopLeft(topLeft, size, defaultDisplay),
+		list: NewScreenList(ScreenListStyle{
+			Location:       topLeft,
+			RepositionSize: size,
+
+			FontSize:      2,
+			Brightness:    95,
+			MinBrightness: 20,
+			LineSpacing:   5,
+
+			BaseTextColor: renderer.RGB8(0, 248, 0),
+		}),
+	}
+}
+
+func (l *CoastList) SetVisible(visible bool) {
+	if l == nil {
+		return
+	}
+	l.visible = visible
+}
+
+func (l *CoastList) Visible() bool {
+	return l != nil && l.visible
+}
+
+func (l *CoastList) SetEntries(entries []CoastListEntry) {
+	if l == nil {
+		return
+	}
+	l.entries = append(l.entries[:0], entries...)
+}
+
+func (l *CoastList) SetBrightness(brightness int) {
+	if l == nil {
+		return
+	}
+	l.list.SetBrightness(brightness)
+}
+
+func (l *CoastList) SetFontSize(size int) {
+	if l == nil {
+		return
+	}
+	l.list.SetFontSize(size)
+}
+
+func (l *CoastList) FontSize() int {
+	if l == nil {
+		return 0
+	}
+	return l.list.FontSize()
+}
+
+func (l *CoastList) SetLocation(pos redsmath.Vec2, displaySize redsmath.Vec2) {
+	if l == nil {
+		return
+	}
+	l.location = RelativeScreenLocationFromTopLeft(pos, l.list.style.RepositionSize, displaySize)
+	l.list.SetLocation(pos)
+}
+
+func (l *CoastList) LocationForDisplay(displaySize redsmath.Vec2) redsmath.Vec2 {
+	if l == nil {
+		return redsmath.Vec2{}
+	}
+	return l.location.Location(displaySize, l.list.style.RepositionSize)
+}
+
+func (l *CoastList) RepositionSize() redsmath.Vec2 {
+	if l == nil {
+		return redsmath.Vec2{}
+	}
+	return l.list.style.RepositionSize
+}
+
+func (l *CoastList) ToggleExpanded() {
+	if l == nil {
+		return
+	}
+	l.expanded = !l.expanded
+	l.offset = 0
+}
+
+func (l *CoastList) PageUp() {
+	if l != nil && l.offset > 0 {
+		l.offset--
+	}
+}
+
+func (l *CoastList) PageDown(font *renderer.BitmapFont, displaySize redsmath.Vec2) {
+	if l == nil || font == nil {
+		return
+	}
+
+	pageSize := l.visibleEntryCount(font, displaySize)
+	if pageSize <= 0 || len(l.entries) == 0 {
+		return
+	}
+	page := l.clampedOffset(len(l.entries), pageSize)
+	if (page+1)*pageSize < len(l.entries) {
+		l.offset = page + 1
+	}
+}
+
+func (l *CoastList) buildHeaderBlock(now time.Time) TextBlock {
+	now = now.UTC()
+
+	return TextBlock{
+		LineSpacing: l.list.style.LineSpacing,
+		Fragments: []TextFragment{
+			{Text: padLeft(now.Format("01/02/06"), 12), NewLine: true},
+			{Text: padLeft(now.Format("1504/05"), 12), NewLine: true},
+		},
+	}
+}
+
+func (l *CoastList) buildFullBlock(
+	now time.Time,
+	font *renderer.BitmapFont,
+	displaySize redsmath.Vec2,
+) TextBlock {
+	block := l.buildHeaderBlock(now)
+	ordered := l.orderedEntries()
+	pageSize := l.visibleEntryCount(font, displaySize)
+	if pageSize <= 0 {
+		return block
+	}
+
+	page := l.clampedOffset(len(ordered), pageSize)
+	start := page * pageSize
+	count := min(pageSize, len(ordered)-start)
+	for index := 0; index < count; index++ {
+		entry := ordered[start+index]
+		color := renderer.RGB{}
+		if entry.Selected {
+			color = renderer.RGB8(255, 255, 255)
+		}
+		block.Fragments = append(block.Fragments, TextFragment{
+			Text:       l.entryLine(entry),
+			Foreground: color,
+			NewLine:    true,
+		})
+	}
+	return block
+}
+
+func (l *CoastList) orderedEntries() []CoastListEntry {
+	if l == nil {
+		return nil
+	}
+
+	ordered := append([]CoastListEntry(nil), l.entries...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		iRank := coastListEntryRank(ordered[i].Status)
+		jRank := coastListEntryRank(ordered[j].Status)
+		if iRank != jRank {
+			return iRank < jRank
+		}
+		return ordered[i].TimeoutSeconds > ordered[j].TimeoutSeconds
+	})
+	return ordered
+}
+
+func (l *CoastList) entryChar(status CoastListEntryStatus) rune {
+	switch status {
+	case CoastListEntryDropped:
+		return 'D'
+	case CoastListEntrySuspended:
+		return 'S'
+	default:
+		return 'C'
+	}
+}
+
+func (l *CoastList) entryLine(entry CoastListEntry) string {
+	id := padRight(truncateRunes(strings.TrimSpace(entry.TrackID), 3), 3)
+
+	label := strings.TrimSpace(entry.Callsign)
+	if label == "" {
+		label = strings.TrimSpace(entry.Beacon)
+		if label != "" {
+			label = zeroPadLeft(label, 4)
+		}
+	}
+	if label == "" {
+		label = "NO DATA"
+	}
+	label = padRight(truncateRunes(label, 8), 8)
+
+	return fmt.Sprintf("%c %s %s", l.entryChar(entry.Status), id, label)
+}
+
+func (l *CoastList) visibleEntryCount(font *renderer.BitmapFont, displaySize redsmath.Vec2) int {
+	if l == nil || font == nil {
+		return 0
+	}
+
+	rowStep := font.LineHeight(l.FontSize()) + l.list.style.LineSpacing
+	if rowStep <= 0 {
+		return 0
+	}
+	if !l.expanded {
+		return 5
+	}
+
+	location := l.LocationForDisplay(displaySize)
+	available := int(displaySize.Y - (location.Y + 2*float32(rowStep)))
+	return max(1, available/rowStep)
+}
+
+func (l *CoastList) clampedOffset(entryCount int, pageSize int) int {
+	if l == nil || entryCount <= 0 || pageSize <= 0 {
+		return 0
+	}
+
+	offset := max(0, l.offset)
+	for offset > 0 && offset*pageSize >= entryCount {
+		offset--
+	}
+	return offset
+}
+
+func (l *CoastList) headerBounds(font *renderer.BitmapFont, displaySize redsmath.Vec2) redsmath.Rect {
+	if l == nil || !l.visible || font == nil {
+		return redsmath.Rect{}
+	}
+
+	location := l.LocationForDisplay(displaySize)
+	width, _ := font.MeasureText(padLeft("01/02/06", 12), l.FontSize())
+	height := float32(font.LineHeight(l.FontSize()))*2.8 + 5
+	return redsmath.NewRect(location.X, location.Y, location.X+float32(width), location.Y+height)
+}
+
+func (l *CoastList) entryRowBounds(
+	visibleIndex int,
+	font *renderer.BitmapFont,
+	displaySize redsmath.Vec2,
+) redsmath.Rect {
+	if l == nil || font == nil || visibleIndex < 0 {
+		return redsmath.Rect{}
+	}
+
+	lineHeight := font.LineHeight(l.FontSize())
+	if lineHeight <= 0 {
+		return redsmath.Rect{}
+	}
+
+	location := l.LocationForDisplay(displaySize)
+	rowWidth, _ := font.MeasureText("S ABC NO DATA ", l.FontSize())
+	rowStep := lineHeight + l.list.style.LineSpacing
+	y := location.Y + 2*float32(rowStep) + float32(visibleIndex*rowStep)
+	return redsmath.NewRect(location.X, y, location.X+float32(rowWidth), y+float32(lineHeight))
+}
+
+func (l *CoastList) upArrowBounds(font *renderer.BitmapFont, displaySize redsmath.Vec2) redsmath.Rect {
+	if l == nil || font == nil {
+		return redsmath.Rect{}
+	}
+
+	ordered := l.orderedEntries()
+	pageSize := l.visibleEntryCount(font, displaySize)
+	page := l.clampedOffset(len(ordered), pageSize)
+	if page <= 0 {
+		return redsmath.Rect{}
+	}
+
+	firstRow := l.entryRowBounds(0, font, displaySize)
+	if firstRow.Empty() {
+		return redsmath.Rect{}
+	}
+	size := float32(max(font.LineHeight(l.FontSize()), 6))
+	return redsmath.NewRect(firstRow.Max.X-size, firstRow.Min.Y, firstRow.Max.X, firstRow.Min.Y+size)
+}
+
+func (l *CoastList) downArrowBounds(font *renderer.BitmapFont, displaySize redsmath.Vec2) redsmath.Rect {
+	if l == nil || font == nil {
+		return redsmath.Rect{}
+	}
+
+	ordered := l.orderedEntries()
+	pageSize := l.visibleEntryCount(font, displaySize)
+	if pageSize <= 0 {
+		return redsmath.Rect{}
+	}
+
+	page := l.clampedOffset(len(ordered), pageSize)
+	start := page * pageSize
+	count := min(pageSize, len(ordered)-start)
+	if count <= 0 || start+count >= len(ordered) {
+		return redsmath.Rect{}
+	}
+
+	lastRow := l.entryRowBounds(count-1, font, displaySize)
+	if lastRow.Empty() {
+		return redsmath.Rect{}
+	}
+	size := float32(max(font.LineHeight(l.FontSize()), 6))
+	return redsmath.NewRect(lastRow.Max.X-size, lastRow.Min.Y, lastRow.Max.X, lastRow.Min.Y+size)
+}
+
+func (l *CoastList) HitTest(
+	point redsmath.Vec2,
+	font *renderer.BitmapFont,
+	displaySize redsmath.Vec2,
+) CoastListEntryHit {
+	if l == nil || !l.visible || font == nil {
+		return CoastListEntryHit{}
+	}
+	if l.headerBounds(font, displaySize).Contains(point) {
+		return CoastListEntryHit{Hit: true, Kind: CoastListHitHeader}
+	}
+	if bounds := l.upArrowBounds(font, displaySize); !bounds.Empty() && bounds.Contains(point) {
+		return CoastListEntryHit{Hit: true, Kind: CoastListHitUpArrow}
+	}
+	if bounds := l.downArrowBounds(font, displaySize); !bounds.Empty() && bounds.Contains(point) {
+		return CoastListEntryHit{Hit: true, Kind: CoastListHitDownArrow}
+	}
+
+	ordered := l.orderedEntries()
+	pageSize := l.visibleEntryCount(font, displaySize)
+	if pageSize <= 0 {
+		return CoastListEntryHit{}
+	}
+	page := l.clampedOffset(len(ordered), pageSize)
+	start := page * pageSize
+	count := min(pageSize, len(ordered)-start)
+	for index := 0; index < count; index++ {
+		if !l.entryRowBounds(index, font, displaySize).Contains(point) {
+			continue
+		}
+
+		entry := ordered[start+index]
+		return CoastListEntryHit{
+			Hit:      true,
+			Kind:     CoastListHitEntry,
+			TargetID: entry.TargetID,
+			TrackID:  entry.TrackID,
+			Status:   entry.Status,
+		}
+	}
+	return CoastListEntryHit{}
+}
+
+func (l *CoastList) Render(
+	td *renderer.TextDrawBuilder,
+	font *renderer.BitmapFont,
+	displaySize redsmath.Vec2,
+) {
+	if l == nil || !l.visible || td == nil || font == nil {
+		return
+	}
+
+	l.list.SetLocation(l.LocationForDisplay(displaySize))
+	l.list.Render(td, font, l.buildFullBlock(time.Now().UTC(), font, displaySize))
+}
+
+func (l *CoastList) RenderArrows(
+	cb *renderer.CmdBuffer,
+	font *renderer.BitmapFont,
+	displaySize redsmath.Vec2,
+) {
+	if l == nil || !l.visible || cb == nil || font == nil {
+		return
+	}
+
+	up := l.upArrowBounds(font, displaySize)
+	down := l.downArrowBounds(font, displaySize)
+	if up.Empty() && down.Empty() {
+		return
+	}
+
+	builder := renderer.GetLinesBuilder()
+	defer renderer.ReturnLinesBuilder(builder)
+
+	if !up.Empty() {
+		addUpChevron(builder, up)
+	}
+	if !down.Empty() {
+		addDownChevron(builder, down)
+	}
+
+	cb.SetRGB(applyBrightness(l.list.style.BaseTextColor, l.list.style.Brightness, l.list.style.MinBrightness))
+	cb.LineWidth(1)
+	builder.GenerateCommands(cb)
+}
+
+func coastListEntryRank(status CoastListEntryStatus) int {
+	switch status {
+	case CoastListEntryCoasting:
+		return 0
+	case CoastListEntrySuspended:
+		return 1
+	case CoastListEntryDropped:
+		return 2
+	default:
+		return 3
+	}
+}
+
+func addUpChevron(builder *renderer.LinesBuilder, rect redsmath.Rect) {
+	left := redsmath.Vec2{
+		X: rect.Min.X + rect.Width()*0.2,
+		Y: rect.Max.Y - rect.Height()*0.25,
+	}
+	top := redsmath.Vec2{
+		X: (rect.Min.X + rect.Max.X) * 0.5,
+		Y: rect.Min.Y + rect.Height()*0.25,
+	}
+	right := redsmath.Vec2{
+		X: rect.Max.X - rect.Width()*0.2,
+		Y: rect.Max.Y - rect.Height()*0.25,
+	}
+
+	builder.AddLine(listPointVertex(left), listPointVertex(top))
+	builder.AddLine(listPointVertex(top), listPointVertex(right))
+}
+
+func addDownChevron(builder *renderer.LinesBuilder, rect redsmath.Rect) {
+	left := redsmath.Vec2{
+		X: rect.Min.X + rect.Width()*0.2,
+		Y: rect.Min.Y + rect.Height()*0.25,
+	}
+	bottom := redsmath.Vec2{
+		X: (rect.Min.X + rect.Max.X) * 0.5,
+		Y: rect.Max.Y - rect.Height()*0.25,
+	}
+	right := redsmath.Vec2{
+		X: rect.Max.X - rect.Width()*0.2,
+		Y: rect.Min.Y + rect.Height()*0.25,
+	}
+
+	builder.AddLine(listPointVertex(left), listPointVertex(bottom))
+	builder.AddLine(listPointVertex(bottom), listPointVertex(right))
 }
 
 type PreviewAreaState struct {
@@ -493,4 +989,40 @@ func clampListInt(value, lo, hi int) int {
 		return hi
 	}
 	return value
+}
+
+func listPointVertex(point redsmath.Vec2) renderer.PointVertex {
+	return renderer.PointVertex{X: point.X, Y: point.Y}
+}
+
+func padLeft(value string, width int) string {
+	runes := []rune(value)
+	for len(runes) < width {
+		runes = append([]rune{' '}, runes...)
+	}
+	return string(runes)
+}
+
+func padRight(value string, width int) string {
+	runes := []rune(value)
+	for len(runes) < width {
+		runes = append(runes, ' ')
+	}
+	return string(runes)
+}
+
+func zeroPadLeft(value string, width int) string {
+	runes := []rune(value)
+	for len(runes) < width {
+		runes = append([]rune{'0'}, runes...)
+	}
+	return string(runes)
+}
+
+func truncateRunes(value string, width int) string {
+	runes := []rune(value)
+	if len(runes) > width {
+		runes = runes[:width]
+	}
+	return string(runes)
 }
