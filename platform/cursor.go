@@ -15,6 +15,26 @@ type Cursor struct {
 	cursor *glfw.Cursor
 }
 
+/*
+.cur uses Little Endian encoding.
+
+File header:
+0-1: reserved. (0 is valid)
+2-3: file type. (2 is cursor)
+4-5: number of images.
+
+Each image directory entry is 16 bytes at 6 + 16 * i:
+0: width.
+1: height.
+2-3: reserved.
+4-5: hotspot x.
+6-7: hotspot y.
+8-11: size.
+12-15: offset.
+
+The image offset points to an embedded DIB with an XOR bitmap and an AND
+transparency mask. The ASDE-X cursor assets use 1, 8, and 32 bit DIBs.
+*/
 type curEntry struct {
 	width, height int
 	hotspot       [2]int
