@@ -226,8 +226,8 @@ type previewTowerPosition struct {
 
 func DefaultPreviewAreaState() PreviewAreaState {
 	return PreviewAreaState{
-		RunwayConfigName: "WEST",
-		TowerPositions:   []string{"LC", "GC"},
+		RunwayConfigName: "LIMITED",
+		TowerPositions:   []string{"GC"},
 		SystemResponse:   "CRITICAL FAULT START",
 	}
 }
