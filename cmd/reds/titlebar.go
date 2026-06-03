@@ -12,7 +12,7 @@ const (
 	scopeTitleBarHeight = 24
 
 	titleBarMenuButtonWidth = 28
-	titleBarMenuIconSize    = 24
+	titleBarMenuIconSize    = 16
 
 	titleBarButtonWidth = 36
 	titleBarIconSize    = 16
@@ -151,12 +151,13 @@ func drawBurgerIcon(min, max imgui.Vec2) {
 
 	x0 := (min.X + max.X - titleBarMenuIconSize) * 0.5
 	y0 := (min.Y + max.Y - titleBarMenuIconSize) * 0.5
+	scale := float32(titleBarMenuIconSize) / 24
 
 	color := imgui.ColorU32Vec4(titleBarFg)
 	rect := func(x, y, w, h float32) {
 		dl.AddRectFilledV(
-			imgui.Vec2{X: x0 + x, Y: y0 + y},
-			imgui.Vec2{X: x0 + x + w, Y: y0 + y + h},
+			imgui.Vec2{X: x0 + x*scale, Y: y0 + y*scale},
+			imgui.Vec2{X: x0 + (x+w)*scale, Y: y0 + (y+h)*scale},
 			color,
 			0,
 			imgui.DrawFlagsNone,
