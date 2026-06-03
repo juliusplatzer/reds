@@ -2,7 +2,7 @@ package asdex
 
 import "github.com/juliusplatzer/reds/panes"
 
-// commands that are executed on slews (click on target) and right slews (right click on target)
+// commands that are executed on stand-alone slews (click on target) and right slews (right click on target)
 
 func registerSlewCommands() {
 	registerCommand(
