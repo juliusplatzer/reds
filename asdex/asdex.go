@@ -70,10 +70,11 @@ type ASDEXPane struct {
 	cursors    CursorSet
 	cursorMode CursorMode
 
-	datablockSettings DataBlockSettings
-	previewArea       PreviewArea
-	coastList         CoastList
-	showCoastList     bool
+	datablockSettings       DataBlockSettings
+	datablockTimeshareStart time.Time
+	previewArea             PreviewArea
+	coastList               CoastList
+	showCoastList           bool
 
 	commandMode     CommandMode
 	datablockEdit   *DatablockEditCommand
@@ -135,10 +136,11 @@ func NewPane(airport string) (*ASDEXPane, error) {
 		fonts:         fonts,
 		eramTextFonts: eramTextFonts,
 
-		datablockSettings: DefaultDataBlockSettings(),
-		previewArea:       preview,
-		coastList:         coastList,
-		showCoastList:     true,
+		datablockSettings:       DefaultDataBlockSettings(),
+		datablockTimeshareStart: time.Now(),
+		previewArea:             preview,
+		coastList:               coastList,
+		showCoastList:           true,
 	}, nil
 }
 
@@ -211,6 +213,7 @@ func (p *ASDEXPane) Draw(ctx *panes.Context, zcb *renderer.ZCmdBuffer) {
 	)
 	targetCB.DisableScissor()
 
+	datablockSettings := p.dataBlockSettings()
 	dbCB := zcb.At(windowZ(0, zDatablocks))
 	dbCB.Viewport(x, y, w, h)
 	dbCB.Scissor(x, y, w, h)
@@ -224,7 +227,7 @@ func (p *ASDEXPane) Draw(ctx *panes.Context, zcb *renderer.ZCmdBuffer) {
 				return p.fonts.textureForSize(ctx.Renderer, size)
 			},
 			SettingsForTarget: func(_ *Target) DataBlockSettings {
-				return p.datablockSettings
+				return datablockSettings
 			},
 		},
 	)
@@ -284,6 +287,33 @@ func (p *ASDEXPane) Draw(ctx *panes.Context, zcb *renderer.ZCmdBuffer) {
 		renderer.ReturnLinesBuilder(builder)
 		cursorCB.DisableScissor()
 	}
+}
+
+func (p *ASDEXPane) dataBlockSettings() DataBlockSettings {
+	settings := DefaultDataBlockSettings()
+	if p == nil {
+		return settings
+	}
+
+	settings = p.datablockSettings
+	settings.TimesharePrimary = p.timesharePrimary(time.Now())
+	return settings
+}
+
+func (p *ASDEXPane) timesharePrimary(now time.Time) bool {
+	if p == nil {
+		return true
+	}
+	if p.datablockTimeshareStart.IsZero() {
+		p.datablockTimeshareStart = now
+	}
+
+	const interval = 2 * time.Second
+	elapsed := now.Sub(p.datablockTimeshareStart)
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	return int(elapsed/interval)%2 == 0
 }
 
 func (p *ASDEXPane) ensureCursorsLoaded(ctx *panes.Context) {
