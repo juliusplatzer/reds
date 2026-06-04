@@ -70,6 +70,7 @@ func (ap *ASDEXPane) cmdTrackSuspend(_ *panes.Context) CommandStatus {
 	}
 
 	ap.commandMode = CommandModeTrackSuspend
+	ap.commandEntry.Clear()
 	ap.datablockEdit = nil
 	ap.editingTargetID = ""
 	ap.initControlEntry = nil
@@ -97,7 +98,7 @@ func (ap *ASDEXPane) cmdTrackSuspendSlew(
 	if target.Suspended || target.Coasting || target.Dropped {
 		return CommandStatus{Clear: ClearAll}
 	}
-	if !targetHasDatablock(classifyTarget(target)) {
+	if !targetCanHaveDataBlock(target) {
 		return CommandStatus{Clear: ClearAll}
 	}
 	if ap.targets.SuspendedCount() >= maxSuspendedTargets {
@@ -249,6 +250,7 @@ func (ap *ASDEXPane) cmdInitControl(_ *panes.Context) CommandStatus {
 	}
 
 	ap.commandMode = CommandModeInitiateControl
+	ap.commandEntry.Clear()
 	ap.initControlEntry = NewCoastListIDEntryCommand("INIT CNTL")
 	ap.termControlEntry = nil
 	ap.datablockEdit = nil
@@ -365,6 +367,7 @@ func (ap *ASDEXPane) cmdTerminateControl(_ *panes.Context) CommandStatus {
 	}
 
 	ap.commandMode = CommandModeTerminateControl
+	ap.commandEntry.Clear()
 	ap.termControlEntry = NewCoastListIDEntryCommand("TERM CNTL")
 	ap.initControlEntry = nil
 	ap.datablockEdit = nil
@@ -390,6 +393,7 @@ func (ap *ASDEXPane) cmdTerminateControlSlew(
 
 	if target.Live &&
 		classifyTarget(target) == targetClassUnknown &&
+		!targetCanHaveDataBlock(target) &&
 		!target.Suspended &&
 		!target.Coasting &&
 		!target.Dropped {

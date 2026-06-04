@@ -53,7 +53,8 @@ type Target struct {
 	Scratchpad1 string
 	Scratchpad2 string
 
-	ShowDB bool
+	ShowDB         bool
+	ForceDataBlock bool
 
 	Live bool
 
@@ -74,7 +75,7 @@ func (t *Target) EffectiveShowDB() bool {
 	if t == nil || !t.ShowDB || t.Suspended || t.Dropped {
 		return false
 	}
-	return targetHasDatablock(classifyTarget(t))
+	return targetCanHaveDataBlock(t)
 }
 
 type TargetHistoryPoint struct {
@@ -88,6 +89,7 @@ type TargetStore struct {
 	history            map[string][]TargetHistoryPoint
 	overrides          map[string]DatablockFieldOverride
 	manualAssociations map[string]ManualAssociationOverride
+	manualTags         map[string]ManualTagOverride
 	terminatedTracks   map[string]bool
 	highlightedID      string
 	hoverRevision      uint64
@@ -99,6 +101,7 @@ func NewTargetStore() TargetStore {
 		history:            make(map[string][]TargetHistoryPoint),
 		overrides:          make(map[string]DatablockFieldOverride),
 		manualAssociations: make(map[string]ManualAssociationOverride),
+		manualTags:         make(map[string]ManualTagOverride),
 		terminatedTracks:   make(map[string]bool),
 	}
 }
@@ -128,6 +131,11 @@ type ManualAssociationOverride struct {
 	Active bool
 }
 
+type ManualTagOverride struct {
+	AircraftID string
+	Active     bool
+}
+
 func (s *TargetStore) SetDatablockOverride(targetID string, override DatablockFieldOverride) {
 	if s == nil || targetID == "" {
 		return
@@ -142,6 +150,7 @@ func (s *TargetStore) SetDatablockOverride(targetID string, override DatablockFi
 	if target := s.TargetByID(targetID); target != nil {
 		applyDatablockOverride(target, override)
 		s.applyManualAssociations(target)
+		s.applyManualTags(target)
 		s.applyTerminationOverride(target)
 	}
 }
@@ -208,6 +217,22 @@ func applyManualAssociation(target *Target, override ManualAssociationOverride) 
 	} else {
 		target.TargetType = stringPointer(targetType)
 	}
+	target.ForceDataBlock = true
+}
+
+func (s *TargetStore) applyManualTags(target *Target) {
+	if s == nil || target == nil || s.manualTags == nil {
+		return
+	}
+
+	override, ok := s.manualTags[target.ID]
+	if !ok || !override.Active {
+		return
+	}
+
+	target.Callsign = strings.ToUpper(strings.TrimSpace(override.AircraftID))
+	target.ForceDataBlock = true
+	target.ShowDB = true
 }
 
 func (s *TargetStore) applyTerminationOverride(target *Target) {
@@ -224,6 +249,7 @@ func (s *TargetStore) applyTerminationOverride(target *Target) {
 	target.Scratchpad2 = ""
 
 	target.ShowDB = false
+	target.ForceDataBlock = false
 	target.Suspended = false
 	target.Coasting = false
 	target.Dropped = false
@@ -244,6 +270,7 @@ func (s *TargetStore) Upsert(t Target) {
 	}
 	s.applyDatablockOverrides(&t)
 	s.applyManualAssociations(&t)
+	s.applyManualTags(&t)
 	s.applyTerminationOverride(&t)
 
 	if existing := s.targets[t.ID]; existing != nil {
@@ -278,6 +305,7 @@ func (s *TargetStore) Remove(id string) {
 	delete(s.history, id)
 	delete(s.overrides, id)
 	delete(s.manualAssociations, id)
+	delete(s.manualTags, id)
 	delete(s.terminatedTracks, id)
 	if s.highlightedID == id {
 		s.highlightedID = ""
@@ -323,6 +351,7 @@ func (s *TargetStore) Clear() {
 	clear(s.history)
 	clear(s.overrides)
 	clear(s.manualAssociations)
+	clear(s.manualTags)
 	clear(s.terminatedTracks)
 	s.order = s.order[:0]
 	s.highlightedID = ""
@@ -534,6 +563,7 @@ func (s *TargetStore) AssociateCoastDropTrackWithUnknown(
 		s.manualAssociations = make(map[string]ManualAssociationOverride)
 	}
 	delete(s.terminatedTracks, dest.ID)
+	delete(s.manualTags, dest.ID)
 	s.manualAssociations[dest.ID] = override
 	applyManualAssociation(dest, override)
 
@@ -560,6 +590,48 @@ func (s *TargetStore) AssociateCoastDropTrackWithUnknown(
 	return true
 }
 
+func (s *TargetStore) ManualTagUnknownTarget(targetID string, aircraftID string) bool {
+	aircraftID = strings.ToUpper(strings.TrimSpace(aircraftID))
+	if s == nil || targetID == "" || aircraftID == "" {
+		return false
+	}
+
+	target := s.TargetByID(targetID)
+	if target == nil {
+		return false
+	}
+	if !targetIsManualTagCandidate(target) {
+		return false
+	}
+
+	if s.manualTags == nil {
+		s.manualTags = make(map[string]ManualTagOverride)
+	}
+
+	delete(s.terminatedTracks, target.ID)
+	delete(s.manualAssociations, target.ID)
+
+	s.manualTags[target.ID] = ManualTagOverride{
+		AircraftID: aircraftID,
+		Active:     true,
+	}
+
+	target.Callsign = aircraftID
+	target.ForceDataBlock = true
+	target.ShowDB = true
+
+	target.Suspended = false
+	target.Coasting = false
+	target.Dropped = false
+	target.CoastListID = ""
+	target.CoastUntil = time.Time{}
+	target.SuspendUntil = time.Time{}
+	target.Live = true
+
+	s.hoverRevision++
+	return true
+}
+
 func (s *TargetStore) TerminateTrack(targetID string) {
 	target := s.TargetByID(targetID)
 	if target == nil {
@@ -580,7 +652,7 @@ func (s *TargetStore) TerminateTrack(targetID string) {
 		return
 	}
 
-	if target.Live && targetHasDatablock(classifyTarget(target)) {
+	if target.Live && targetCanHaveDataBlock(target) {
 		s.returnLiveTrackToUnknown(target)
 		return
 	}
@@ -593,6 +665,7 @@ func (s *TargetStore) returnLiveTrackToUnknown(target *Target) {
 
 	delete(s.overrides, target.ID)
 	delete(s.manualAssociations, target.ID)
+	delete(s.manualTags, target.ID)
 	if s.terminatedTracks == nil {
 		s.terminatedTracks = make(map[string]bool)
 	}
@@ -688,7 +761,7 @@ func (s *TargetStore) UpdateCoastDropTracks(
 		if !target.Live {
 			continue
 		}
-		if !targetHasDatablock(classifyTarget(target)) {
+		if !targetCanHaveDataBlock(target) {
 			continue
 		}
 
@@ -1080,6 +1153,13 @@ func targetHasDatablock(class targetClass) bool {
 		class == targetClassHeavyAircraft
 }
 
+func targetCanHaveDataBlock(target *Target) bool {
+	if target == nil {
+		return false
+	}
+	return target.ForceDataBlock || targetHasDatablock(classifyTarget(target))
+}
+
 func isInitControlUnknownTarget(target *Target) bool {
 	if target == nil {
 		return false
@@ -1087,7 +1167,17 @@ func isInitControlUnknownTarget(target *Target) bool {
 	if !target.Live || target.Suspended || target.Coasting || target.Dropped {
 		return false
 	}
-	return classifyTarget(target) == targetClassUnknown
+	return classifyTarget(target) == targetClassUnknown && !targetCanHaveDataBlock(target)
+}
+
+func targetIsManualTagCandidate(target *Target) bool {
+	if target == nil {
+		return false
+	}
+	if !target.Live || target.Suspended || target.Coasting || target.Dropped {
+		return false
+	}
+	return classifyTarget(target) == targetClassUnknown && !targetCanHaveDataBlock(target)
 }
 
 func isHeavyCWT(cwt string) bool {

@@ -85,6 +85,7 @@ type ASDEXPane struct {
 	hoveredCoastListTarget  string
 
 	commandMode      CommandMode
+	commandEntry     CommandTextEntry
 	datablockEdit    *DatablockEditCommand
 	editingTargetID  string
 	initControlEntry *CoastListIDEntryCommand
@@ -544,6 +545,9 @@ func (p *ASDEXPane) activeCommandLines() []string {
 	if p.commandMode == CommandModeTrackSuspend {
 		return []string{"TRK SUSP"}
 	}
+	if !p.commandEntry.Empty() {
+		return p.commandEntry.DisplayLines()
+	}
 	return nil
 }
 
@@ -559,6 +563,9 @@ func (p *ASDEXPane) activeCommandCursor() (line int, column int, ok bool) {
 	}
 	if p.termControlEntry != nil {
 		return p.termControlEntry.CursorLine(), p.termControlEntry.CursorColumn(), true
+	}
+	if !p.commandEntry.Empty() {
+		return p.commandEntry.CursorLine(), p.commandEntry.CursorColumn(), true
 	}
 	return 0, 0, false
 }
@@ -576,6 +583,7 @@ func (p *ASDEXPane) cancelActiveCommand() {
 	p.editingTargetID = ""
 	p.initControlEntry = nil
 	p.termControlEntry = nil
+	p.commandEntry.Clear()
 	p.previewArea.SetSystemResponse("")
 }
 
@@ -600,6 +608,9 @@ func (p *ASDEXPane) consumeCommandKeyboard(ctx *panes.Context) bool {
 			p.cancelActiveCommand()
 			return true
 		}
+	}
+	if p.commandMode == CommandModeNone {
+		return p.handleNormalCommandKeyboard(ctx)
 	}
 	return false
 }
@@ -716,6 +727,43 @@ func (p *ASDEXPane) handleTerminateControlKeyboard(ctx *panes.Context) bool {
 	handled := false
 	for _, r := range keyboard.Text {
 		entry.Insert(r)
+		p.previewArea.SetSystemResponse("")
+		handled = true
+	}
+	return handled
+}
+
+func (p *ASDEXPane) handleNormalCommandKeyboard(ctx *panes.Context) bool {
+	if p == nil || ctx == nil || ctx.Keyboard == nil {
+		return false
+	}
+
+	keyboard := ctx.Keyboard
+	switch {
+	case keyboard.WasPressed(platform.KeyEscape):
+		if !p.commandEntry.Empty() {
+			p.commandEntry.Clear()
+			p.previewArea.SetSystemResponse("")
+			return true
+		}
+		return false
+	case keyboard.WasPressed(platform.KeyLeft):
+		p.commandEntry.MoveLeft()
+		return !p.commandEntry.Empty()
+	case keyboard.WasPressed(platform.KeyRight):
+		p.commandEntry.MoveRight()
+		return !p.commandEntry.Empty()
+	case keyboard.WasPressed(platform.KeyBackspace):
+		p.commandEntry.Backspace()
+		return true
+	case keyboard.WasPressed(platform.KeyDelete):
+		p.commandEntry.DeleteForward()
+		return true
+	}
+
+	handled := false
+	for _, r := range keyboard.Text {
+		p.commandEntry.Insert(r)
 		p.previewArea.SetSystemResponse("")
 		handled = true
 	}

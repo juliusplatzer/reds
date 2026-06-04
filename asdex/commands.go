@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"unicode"
 
 	redsmath "github.com/juliusplatzer/reds/math"
 	"github.com/juliusplatzer/reds/panes"
@@ -35,6 +36,125 @@ type CommandStatus struct {
 
 	Output    string
 	HasOutput bool
+}
+
+const maxManualTagAircraftIDLength = 7
+
+type AircraftID string
+
+type CommandTextEntry struct {
+	value  string
+	cursor int
+}
+
+func (entry *CommandTextEntry) Empty() bool {
+	return entry == nil || strings.TrimSpace(entry.value) == ""
+}
+
+func (entry *CommandTextEntry) Value() string {
+	if entry == nil {
+		return ""
+	}
+	return strings.ToUpper(strings.TrimSpace(entry.value))
+}
+
+func (entry *CommandTextEntry) DisplayLines() []string {
+	if entry == nil || entry.Empty() {
+		return nil
+	}
+	return []string{entry.value}
+}
+
+func (entry *CommandTextEntry) CursorLine() int {
+	return 1
+}
+
+func (entry *CommandTextEntry) CursorColumn() int {
+	if entry == nil {
+		return 0
+	}
+	return entry.cursor
+}
+
+func (entry *CommandTextEntry) Insert(r rune) {
+	if entry == nil {
+		return
+	}
+
+	r = unicode.ToUpper(r)
+	if !unicode.IsLetter(r) && !unicode.IsDigit(r) {
+		return
+	}
+
+	value := []rune(entry.value)
+	if len(value) >= maxManualTagAircraftIDLength {
+		return
+	}
+	entry.cursor = clampInt(entry.cursor, 0, len(value))
+
+	value = append(value[:entry.cursor], append([]rune{r}, value[entry.cursor:]...)...)
+	entry.value = string(value)
+	entry.cursor++
+}
+
+func (entry *CommandTextEntry) Backspace() {
+	if entry == nil || entry.cursor <= 0 {
+		return
+	}
+
+	value := []rune(entry.value)
+	if entry.cursor > len(value) {
+		entry.cursor = len(value)
+	}
+	if entry.cursor <= 0 {
+		return
+	}
+
+	entry.cursor--
+	value = append(value[:entry.cursor], value[entry.cursor+1:]...)
+	entry.value = string(value)
+}
+
+func (entry *CommandTextEntry) DeleteForward() {
+	if entry == nil {
+		return
+	}
+
+	value := []rune(entry.value)
+	entry.cursor = clampInt(entry.cursor, 0, len(value))
+	if entry.cursor >= len(value) {
+		return
+	}
+
+	value = append(value[:entry.cursor], value[entry.cursor+1:]...)
+	entry.value = string(value)
+}
+
+func (entry *CommandTextEntry) MoveLeft() {
+	if entry == nil {
+		return
+	}
+	if entry.cursor > 0 {
+		entry.cursor--
+	}
+}
+
+func (entry *CommandTextEntry) MoveRight() {
+	if entry == nil {
+		return
+	}
+	value := []rune(entry.value)
+	if entry.cursor < len(value) {
+		entry.cursor++
+	}
+}
+
+func (entry *CommandTextEntry) Clear() {
+	if entry == nil {
+		return
+	}
+	entry.value = ""
+	entry.cursor = 0
 }
 
 func commandOutput(text string) CommandStatus {
@@ -150,6 +270,40 @@ func (rightSlewMatcher) validate() error      { return nil }
 func (rightSlewMatcher) goType() reflect.Type { return reflect.TypeFor[*Target]() }
 func (rightSlewMatcher) consumesClick() bool  { return true }
 
+type acidMatcher struct{}
+
+func (acidMatcher) match(
+	_ *ASDEXPane,
+	_ *panes.Context,
+	_ *CommandInput,
+	text string,
+) (*matchResult, error) {
+	text = strings.ToUpper(strings.TrimSpace(text))
+	if text == "" {
+		return nil, nil
+	}
+
+	runes := []rune(text)
+	if len(runes) > maxManualTagAircraftIDLength {
+		return nil, nil
+	}
+	for _, r := range runes {
+		if !unicode.IsLetter(r) && !unicode.IsDigit(r) {
+			return nil, nil
+		}
+	}
+
+	return &matchResult{
+		values:    []any{AircraftID(text)},
+		remaining: "",
+		matched:   true,
+	}, nil
+}
+
+func (acidMatcher) validate() error      { return nil }
+func (acidMatcher) goType() reflect.Type { return reflect.TypeFor[AircraftID]() }
+func (acidMatcher) consumesClick() bool  { return false }
+
 type handlerArgumentKind int
 
 const (
@@ -254,6 +408,8 @@ func makeMatchers(spec string) ([]matcher, error) {
 			}
 
 			switch name := remaining[1:end]; name {
+			case "ACID":
+				matchers = append(matchers, acidMatcher{})
 			case "SLEW":
 				matchers = append(matchers, slewMatcher{})
 			case "R SLEW":
@@ -501,8 +657,9 @@ func (ap *ASDEXPane) applyCommandStatus(status CommandStatus) {
 		ap.commandMode = CommandModeNone
 		ap.initControlEntry = nil
 		ap.termControlEntry = nil
+		ap.commandEntry.Clear()
 	case ClearInput:
-		// Later command-entry text can be cleared without leaving the mode.
+		ap.commandEntry.Clear()
 	case ClearNone:
 	}
 }
@@ -584,6 +741,12 @@ func (ap *ASDEXPane) consumeCommandClicks(
 	target := ap.highlightedTarget()
 	if target == nil {
 		if clickKind == CommandClickLeft {
+			if ap.commandMode == CommandModeNone && !ap.commandEntry.Empty() {
+				ap.commandEntry.Clear()
+				ap.applyCommandStatus(commandOutputClearAll("NO SLEW"))
+				return true
+			}
+
 			switch ap.commandMode {
 			case CommandModeTrackSuspend:
 				ap.applyCommandStatus(commandOutputClearAll("NO SLEW"))
@@ -601,7 +764,19 @@ func (ap *ASDEXPane) consumeCommandClicks(
 		return false
 	}
 
-	status, err, handled := ap.tryExecuteUserCommand(ctx, "", target, clickKind, mouse.Pos, transforms)
+	cmdText := ""
+	if ap.commandMode == CommandModeNone && clickKind == CommandClickLeft {
+		cmdText = ap.commandEntry.Value()
+	}
+
+	status, err, handled := ap.tryExecuteUserCommand(
+		ctx,
+		cmdText,
+		target,
+		clickKind,
+		mouse.Pos,
+		transforms,
+	)
 	if err != nil {
 		ap.previewArea.SetSystemResponse(err.Error())
 		return true
