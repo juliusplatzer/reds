@@ -84,9 +84,10 @@ type ASDEXPane struct {
 	showCoastList           bool
 	hoveredCoastListTarget  string
 
-	commandMode     CommandMode
-	datablockEdit   *DatablockEditCommand
-	editingTargetID string
+	commandMode      CommandMode
+	datablockEdit    *DatablockEditCommand
+	editingTargetID  string
+	initControlEntry *InitControlEntryCommand
 
 	rightClickStart     redsmath.Vec2
 	rightClickCandidate bool
@@ -313,7 +314,7 @@ func (p *ASDEXPane) Draw(ctx *panes.Context, zcb *renderer.ZCmdBuffer) {
 	}
 	listCB.DisableScissor()
 
-	if p.datablockEdit != nil {
+	if cursorLine, cursorColumn, ok := p.activeCommandCursor(); ok {
 		cursorCB := zcb.At(windowZ(0, zPreviewCursor))
 		cursorCB.Viewport(x, y, w, h)
 		cursorCB.Scissor(x, y, w, h)
@@ -326,8 +327,8 @@ func (p *ASDEXPane) Draw(ctx *panes.Context, zcb *renderer.ZCmdBuffer) {
 			builder,
 			p.fonts.font,
 			ctx.PaneSize(),
-			p.datablockEdit.CursorLine(),
-			p.datablockEdit.CursorColumn(),
+			cursorLine,
+			cursorColumn,
 			p.previewArea.BaseLineCount(),
 		)
 		builder.GenerateCommands(cursorCB)
@@ -531,10 +532,26 @@ func (p *ASDEXPane) activeCommandLines() []string {
 	if p.datablockEdit != nil {
 		return p.datablockEdit.DisplayLines()
 	}
+	if p.initControlEntry != nil {
+		return p.initControlEntry.DisplayLines()
+	}
 	if p.commandMode == CommandModeTrackSuspend {
 		return []string{"TRK SUSP"}
 	}
 	return nil
+}
+
+func (p *ASDEXPane) activeCommandCursor() (line int, column int, ok bool) {
+	if p == nil {
+		return 0, 0, false
+	}
+	if p.datablockEdit != nil {
+		return p.datablockEdit.CursorLine(), p.datablockEdit.CursorColumn(), true
+	}
+	if p.initControlEntry != nil {
+		return p.initControlEntry.CursorLine(), p.initControlEntry.CursorColumn(), true
+	}
+	return 0, 0, false
 }
 
 func (p *ASDEXPane) cancelDatablockEdit() {
@@ -548,6 +565,7 @@ func (p *ASDEXPane) cancelActiveCommand() {
 	p.commandMode = CommandModeNone
 	p.datablockEdit = nil
 	p.editingTargetID = ""
+	p.initControlEntry = nil
 	p.previewArea.SetSystemResponse("")
 }
 
@@ -557,6 +575,9 @@ func (p *ASDEXPane) consumeCommandKeyboard(ctx *panes.Context) bool {
 	}
 	if p.datablockEdit != nil {
 		return p.handleDatablockEditKeyboard(ctx)
+	}
+	if p.initControlEntry != nil {
+		return p.handleInitControlKeyboard(ctx)
 	}
 	if p.commandMode != CommandModeNone {
 		keyboard := ctx.Keyboard
@@ -609,6 +630,43 @@ func (p *ASDEXPane) handleDatablockEditKeyboard(ctx *panes.Context) bool {
 	handled := false
 	for _, r := range keyboard.Text {
 		edit.Insert(r)
+		handled = true
+	}
+	return handled
+}
+
+func (p *ASDEXPane) handleInitControlKeyboard(ctx *panes.Context) bool {
+	if p == nil || p.initControlEntry == nil || ctx == nil || ctx.Keyboard == nil {
+		return false
+	}
+
+	keyboard := ctx.Keyboard
+	entry := p.initControlEntry
+	switch {
+	case keyboard.WasPressed(platform.KeyEscape):
+		p.cancelActiveCommand()
+		return true
+	case keyboard.WasPressed(platform.KeyEnter), keyboard.WasPressed(platform.KeyKeypadEnter):
+		p.submitInitControlEntry()
+		return true
+	case keyboard.WasPressed(platform.KeyLeft):
+		entry.MoveLeft()
+		return true
+	case keyboard.WasPressed(platform.KeyRight):
+		entry.MoveRight()
+		return true
+	case keyboard.WasPressed(platform.KeyBackspace):
+		entry.Backspace()
+		return true
+	case keyboard.WasPressed(platform.KeyDelete):
+		entry.DeleteForward()
+		return true
+	}
+
+	handled := false
+	for _, r := range keyboard.Text {
+		entry.Insert(r)
+		p.previewArea.SetSystemResponse("")
 		handled = true
 	}
 	return handled
@@ -731,6 +789,10 @@ func (p *ASDEXPane) consumeCoastListClicks(ctx *panes.Context) bool {
 	case CoastListHitDownArrow:
 		p.coastList.PageDown(p.fonts.font, ctx.PaneSize())
 	case CoastListHitEntry:
+		if hit.Status != CoastListEntrySuspended {
+			return true
+		}
+
 		target := p.targets.TargetByID(hit.TargetID)
 		if target == nil {
 			return true

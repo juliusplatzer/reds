@@ -18,6 +18,7 @@ const (
 	CommandModeNone CommandMode = iota
 	CommandModeEditDatablockFields
 	CommandModeTrackSuspend
+	CommandModeInitiateControl
 )
 
 type CommandClear int
@@ -497,6 +498,7 @@ func (ap *ASDEXPane) applyCommandStatus(status CommandStatus) {
 	switch status.Clear {
 	case ClearAll:
 		ap.commandMode = CommandModeNone
+		ap.initControlEntry = nil
 	case ClearInput:
 		// Later command-entry text can be cleared without leaving the mode.
 	case ClearNone:
@@ -510,13 +512,23 @@ func (ap *ASDEXPane) consumeOpsHotkeys(
 	if ap == nil || ctx == nil || ctx.Keyboard == nil || ap.datablockEdit != nil {
 		return false
 	}
-	if !ctx.Keyboard.WasPressed(platform.KeyF4) {
+	if ap.commandMode != CommandModeNone {
+		return false
+	}
+
+	command := ""
+	switch {
+	case ctx.Keyboard.WasPressed(platform.KeyF3):
+		command = "[INIT CNTL]"
+	case ctx.Keyboard.WasPressed(platform.KeyF4):
+		command = "[TRK SUSP]"
+	default:
 		return false
 	}
 
 	status, err, handled := ap.tryExecuteUserCommand(
 		ctx,
-		"[TRK SUSP]",
+		command,
 		nil,
 		CommandClickNone,
 		redsmath.Vec2{},
@@ -567,13 +579,16 @@ func (ap *ASDEXPane) consumeCommandClicks(
 
 	target := ap.highlightedTarget()
 	if target == nil {
-		if ap.commandMode == CommandModeTrackSuspend && clickKind == CommandClickLeft {
-			ap.applyCommandStatus(CommandStatus{
-				Clear:     ClearAll,
-				Output:    "NO SLEW",
-				HasOutput: true,
-			})
-			return true
+		if clickKind == CommandClickLeft {
+			switch ap.commandMode {
+			case CommandModeTrackSuspend:
+				ap.applyCommandStatus(commandOutputClearAll("NO SLEW"))
+				return true
+			case CommandModeInitiateControl:
+				ap.initControlEntry = nil
+				ap.applyCommandStatus(commandOutputClearAll("NO SLEW"))
+				return true
+			}
 		}
 		return false
 	}

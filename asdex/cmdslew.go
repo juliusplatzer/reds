@@ -44,11 +44,7 @@ func (ap *ASDEXPane) cmdBareAircraftSlew(
 	}
 
 	if target.Coasting || target.Dropped {
-		ap.targets.TerminateCoastDropTrack(target.ID)
-		return CommandStatus{
-			Output:    "",
-			HasOutput: true,
-		}
+		return CommandStatus{}
 	}
 
 	if !targetHasDatablock(classifyTarget(target)) {
@@ -74,6 +70,7 @@ func (ap *ASDEXPane) cmdRSlew(
 	ap.commandMode = CommandModeEditDatablockFields
 	ap.editingTargetID = target.ID
 	ap.datablockEdit = &edit
+	ap.initControlEntry = nil
 	ap.previewArea.SetSystemResponse("")
 	ap.clearHighlightedTarget()
 

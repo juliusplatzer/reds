@@ -85,17 +85,19 @@ type TargetStore struct {
 	targets map[string]*Target
 	order   []string
 
-	history       map[string][]TargetHistoryPoint
-	overrides     map[string]DatablockFieldOverride
-	highlightedID string
-	hoverRevision uint64
+	history            map[string][]TargetHistoryPoint
+	overrides          map[string]DatablockFieldOverride
+	manualAssociations map[string]ManualAssociationOverride
+	highlightedID      string
+	hoverRevision      uint64
 }
 
 func NewTargetStore() TargetStore {
 	return TargetStore{
-		targets:   make(map[string]*Target),
-		history:   make(map[string][]TargetHistoryPoint),
-		overrides: make(map[string]DatablockFieldOverride),
+		targets:            make(map[string]*Target),
+		history:            make(map[string][]TargetHistoryPoint),
+		overrides:          make(map[string]DatablockFieldOverride),
+		manualAssociations: make(map[string]ManualAssociationOverride),
 	}
 }
 
@@ -112,6 +114,18 @@ type DatablockFieldOverride struct {
 	Active bool
 }
 
+type ManualAssociationOverride struct {
+	Callsign    string
+	Beacon      string
+	CWT         string
+	TargetType  string
+	Fix         string
+	Scratchpad1 string
+	Scratchpad2 string
+
+	Active bool
+}
+
 func (s *TargetStore) SetDatablockOverride(targetID string, override DatablockFieldOverride) {
 	if s == nil || targetID == "" {
 		return
@@ -125,6 +139,7 @@ func (s *TargetStore) SetDatablockOverride(targetID string, override DatablockFi
 
 	if target := s.TargetByID(targetID); target != nil {
 		applyDatablockOverride(target, override)
+		s.applyManualAssociations(target)
 	}
 }
 
@@ -160,6 +175,38 @@ func applyDatablockOverride(target *Target, override DatablockFieldOverride) {
 	}
 }
 
+func (s *TargetStore) applyManualAssociations(target *Target) {
+	if s == nil || target == nil || s.manualAssociations == nil {
+		return
+	}
+
+	override, ok := s.manualAssociations[target.ID]
+	if !ok {
+		return
+	}
+	applyManualAssociation(target, override)
+}
+
+func applyManualAssociation(target *Target, override ManualAssociationOverride) {
+	if target == nil || !override.Active {
+		return
+	}
+
+	target.Callsign = override.Callsign
+	target.Beacon = override.Beacon
+	target.CWT = override.CWT
+	target.Fix = override.Fix
+	target.Scratchpad1 = override.Scratchpad1
+	target.Scratchpad2 = override.Scratchpad2
+
+	targetType := strings.TrimSpace(override.TargetType)
+	if targetType == "" {
+		target.TargetType = nil
+	} else {
+		target.TargetType = stringPointer(targetType)
+	}
+}
+
 func (s *TargetStore) Upsert(t Target) {
 	if s == nil || t.ID == "" {
 		return
@@ -171,6 +218,7 @@ func (s *TargetStore) Upsert(t Target) {
 		s.history = make(map[string][]TargetHistoryPoint)
 	}
 	s.applyDatablockOverrides(&t)
+	s.applyManualAssociations(&t)
 
 	if existing := s.targets[t.ID]; existing != nil {
 		if existing.PosFeet != t.PosFeet {
@@ -203,6 +251,7 @@ func (s *TargetStore) Remove(id string) {
 	delete(s.targets, id)
 	delete(s.history, id)
 	delete(s.overrides, id)
+	delete(s.manualAssociations, id)
 	if s.highlightedID == id {
 		s.highlightedID = ""
 	}
@@ -246,6 +295,7 @@ func (s *TargetStore) Clear() {
 	clear(s.targets)
 	clear(s.history)
 	clear(s.overrides)
+	clear(s.manualAssociations)
 	s.order = s.order[:0]
 	s.highlightedID = ""
 }
@@ -352,6 +402,40 @@ func (s *TargetStore) NextAvailableNumericCoastListID() string {
 	return ""
 }
 
+func (s *TargetStore) SuspendedTargetByCoastListID(id string) *Target {
+	id = strings.ToUpper(strings.TrimSpace(id))
+	if s == nil || id == "" {
+		return nil
+	}
+
+	for _, target := range s.targets {
+		if target == nil || !target.Suspended {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(target.CoastListID), id) {
+			return target
+		}
+	}
+	return nil
+}
+
+func (s *TargetStore) CoastDropTargetByCoastListID(id string) *Target {
+	id = strings.ToUpper(strings.TrimSpace(id))
+	if s == nil || id == "" {
+		return nil
+	}
+
+	for _, target := range s.targets {
+		if target == nil || (!target.Coasting && !target.Dropped) {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(target.CoastListID), id) {
+			return target
+		}
+	}
+	return nil
+}
+
 func (s *TargetStore) SuspendTarget(targetID string, coastListID string, until time.Time) {
 	target := s.TargetByID(targetID)
 	if target == nil {
@@ -366,6 +450,68 @@ func (s *TargetStore) SuspendTarget(targetID string, coastListID string, until t
 	target.CoastUntil = time.Time{}
 	target.ShowDB = false
 	s.hoverRevision++
+}
+
+func (s *TargetStore) AssociateCoastDropTrackWithUnknown(
+	coastListID string,
+	unknownTargetID string,
+) bool {
+	if s == nil {
+		return false
+	}
+
+	source := s.CoastDropTargetByCoastListID(coastListID)
+	dest := s.TargetByID(unknownTargetID)
+	if source == nil || dest == nil {
+		return false
+	}
+	if !isInitControlUnknownTarget(dest) {
+		return false
+	}
+
+	targetType := ""
+	if source.TargetType != nil {
+		targetType = *source.TargetType
+	}
+
+	override := ManualAssociationOverride{
+		Callsign:    source.Callsign,
+		Beacon:      source.Beacon,
+		CWT:         source.CWT,
+		TargetType:  targetType,
+		Fix:         source.Fix,
+		Scratchpad1: source.Scratchpad1,
+		Scratchpad2: source.Scratchpad2,
+		Active:      true,
+	}
+
+	if s.manualAssociations == nil {
+		s.manualAssociations = make(map[string]ManualAssociationOverride)
+	}
+	s.manualAssociations[dest.ID] = override
+	applyManualAssociation(dest, override)
+
+	dest.ShowDB = true
+	dest.Live = true
+	dest.Coasting = false
+	dest.Dropped = false
+	dest.Suspended = false
+	dest.CoastListID = ""
+	dest.CoastUntil = time.Time{}
+	dest.SuspendUntil = time.Time{}
+
+	if source.ID != dest.ID {
+		s.Remove(source.ID)
+	} else {
+		source.Coasting = false
+		source.Dropped = false
+		source.CoastListID = ""
+		source.CoastUntil = time.Time{}
+		source.ShowDB = true
+	}
+
+	s.hoverRevision++
+	return true
 }
 
 func (s *TargetStore) UnsuspendTarget(targetID string) {
@@ -843,6 +989,16 @@ func targetHasDatablock(class targetClass) bool {
 	return class == targetClassVehicle ||
 		class == targetClassAircraft ||
 		class == targetClassHeavyAircraft
+}
+
+func isInitControlUnknownTarget(target *Target) bool {
+	if target == nil {
+		return false
+	}
+	if !target.Live || target.Suspended || target.Coasting || target.Dropped {
+		return false
+	}
+	return classifyTarget(target) == targetClassUnknown
 }
 
 func isHeavyCWT(cwt string) bool {
