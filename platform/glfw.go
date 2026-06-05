@@ -359,6 +359,7 @@ var trackedKeys = []trackedKey{
 	{KeyF11, glfw.KeyF11},
 	{KeyF12, glfw.KeyF12},
 	{KeyAlt, glfw.KeyLeftAlt},
+	{KeyShift, glfw.KeyLeftShift},
 }
 
 func (g *glfwPlatform) updateKeyboard() {
@@ -395,6 +396,10 @@ func (g *glfwPlatform) isKeyDown(tk trackedKey) bool {
 	if tk.key == KeyAlt {
 		return g.window.GetKey(glfw.KeyLeftAlt) == glfw.Press ||
 			g.window.GetKey(glfw.KeyRightAlt) == glfw.Press
+	}
+	if tk.key == KeyShift {
+		return g.window.GetKey(glfw.KeyLeftShift) == glfw.Press ||
+			g.window.GetKey(glfw.KeyRightShift) == glfw.Press
 	}
 	return g.window.GetKey(tk.glfw) == glfw.Press
 }
