@@ -1090,6 +1090,11 @@ func (ap *ASDEXPane) consumeCommandClicks(
 			cmdText = ap.commandEntry.Value()
 		}
 	}
+	if ap.commandMode == CommandModeMultiFunction &&
+		clickKind == CommandClickLeft &&
+		ap.multiFunction != nil {
+		cmdText = ap.multiFunction.Value()
+	}
 
 	status, err, handled := ap.tryExecuteUserCommand(
 		ctx,
@@ -1105,6 +1110,13 @@ func (ap *ASDEXPane) consumeCommandClicks(
 	}
 	if handled {
 		ap.applyCommandStatus(status)
+		return true
+	}
+	if ap.commandMode == CommandModeMultiFunction &&
+		clickKind == CommandClickLeft &&
+		ap.multiFunction != nil &&
+		ap.multiFunction.Value() != "" {
+		ap.applyCommandStatus(commandOutputClearAll("INVALID ENTRY"))
 		return true
 	}
 	if ap.commandMode == CommandModeNone && clickKind == CommandClickLeft && !ap.commandEntry.Empty() {

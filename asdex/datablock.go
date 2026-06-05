@@ -188,12 +188,14 @@ func leaderDelta(distancePx float32, headingDegrees int) redsmath.Vec2 {
 	}
 }
 
-func acidField(target *Target) string {
+func datablockIDField(target *Target, showBeaconCode bool) string {
 	if target == nil {
 		return ""
 	}
-	if callsign := strings.TrimSpace(target.Callsign); callsign != "" {
-		return callsign
+	if !showBeaconCode {
+		if callsign := strings.TrimSpace(target.Callsign); callsign != "" {
+			return callsign
+		}
 	}
 	return beaconField(target)
 }
@@ -278,8 +280,8 @@ func appendDBField(line string, field string) string {
 	return line + " " + field
 }
 
-func buildLine1(target *Target, settings DataBlockSettings) string {
-	line := acidField(target)
+func buildLine1(target *Target, settings DataBlockSettings, showBeaconCode bool) string {
+	line := datablockIDField(target, showBeaconCode)
 	if settings.ShowAltitude {
 		line = appendDBField(line, altitudeField(target))
 	}
@@ -347,7 +349,12 @@ type builtDataBlock struct {
 	longestLowestLineNumber  int
 }
 
-func buildDataBlock(target *Target, settings DataBlockSettings, font *renderer.BitmapFont) builtDataBlock {
+func buildDataBlock(
+	target *Target,
+	settings DataBlockSettings,
+	font *renderer.BitmapFont,
+	showBeaconCode bool,
+) builtDataBlock {
 	var out builtDataBlock
 
 	// Duplicate beacon warnings are reserved for the next target-logic pass.
@@ -355,14 +362,14 @@ func buildDataBlock(target *Target, settings DataBlockSettings, font *renderer.B
 	out.lines = append(out.lines, duplicateBeaconLine)
 
 	if !settings.FullDataBlocks {
-		line1 := acidField(target)
+		line1 := datablockIDField(target, showBeaconCode)
 		out.lines = append(out.lines, line1)
 		measureDataBlockLine(&out, duplicateBeaconLine, 0, settings.FontSize, font)
 		measureDataBlockLine(&out, line1, 1, settings.FontSize, font)
 		return out
 	}
 
-	line1 := buildLine1(target, settings)
+	line1 := buildLine1(target, settings, showBeaconCode)
 	primaryLine2 := buildPrimaryLine2(target, settings)
 	scratchLine2 := scratchpadLine(target, settings)
 	line2 := chooseLine2(primaryLine2, scratchLine2, settings)
@@ -417,12 +424,13 @@ func drawOneDataBlock(
 	td *renderer.TextDrawBuilder,
 	font *renderer.BitmapFont,
 	settings DataBlockSettings,
+	showBeaconCode bool,
 ) {
 	if target == nil || lineBuilder == nil || td == nil || font == nil {
 		return
 	}
 
-	block := buildDataBlock(target, settings, font)
+	block := buildDataBlock(target, settings, font, showBeaconCode)
 	if block.maxLineWidth <= 0 {
 		return
 	}
@@ -498,7 +506,8 @@ type DataBlockDrawOptions struct {
 
 	FontTextureForSize func(size int) renderer.TextureID
 
-	SettingsForTarget func(target *Target) DataBlockSettings
+	SettingsForTarget       func(target *Target) DataBlockSettings
+	ShowBeaconCodeForTarget func(target *Target) bool
 }
 
 func DrawDatablocks(
@@ -525,6 +534,11 @@ func DrawDatablocks(
 			continue
 		}
 
+		showBeaconCode := false
+		if opts.ShowBeaconCodeForTarget != nil {
+			showBeaconCode = opts.ShowBeaconCodeForTarget(target)
+		}
+
 		textureID := opts.FontTextureForSize(settings.FontSize)
 		if textureID == 0 {
 			continue
@@ -541,6 +555,7 @@ func DrawDatablocks(
 			td,
 			opts.Font,
 			settings,
+			showBeaconCode,
 		)
 
 		cb.SetRGB(applyBrightness(

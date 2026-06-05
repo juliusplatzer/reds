@@ -111,6 +111,14 @@ func registerSetupCommands() {
 	)
 
 	registerCommand(
+		CommandModeMultiFunction,
+		"B[SLEW]",
+		func(ap *ASDEXPane, ctx *panes.Context, target *Target) CommandStatus {
+			return ap.cmdBeaconatorSlew(ctx, target)
+		},
+	)
+
+	registerCommand(
 		CommandModePreviewReposition,
 		"[DISPLAY SLEW]",
 		func(ap *ASDEXPane, ctx *panes.Context, point DisplayPoint) CommandStatus {
@@ -234,6 +242,29 @@ func (ap *ASDEXPane) cmdCoastListRepositionSlew(
 		ap.coastList.RepositionSize(),
 	)
 	ap.coastList.SetLocation(pos, ctx.PaneSize())
+
+	return CommandStatus{
+		Clear:     ClearAll,
+		Output:    "",
+		HasOutput: true,
+	}
+}
+
+func (ap *ASDEXPane) cmdBeaconatorSlew(
+	_ *panes.Context,
+	target *Target,
+) CommandStatus {
+	if ap == nil {
+		return CommandStatus{Clear: ClearAll}
+	}
+	if target == nil {
+		return commandOutputClearAll("NO SLEW")
+	}
+	if target.Suspended || target.Dropped || !targetCanHaveDataBlock(target) {
+		return commandOutputClearAll("INVALID ENTRY")
+	}
+
+	ap.toggleTemporaryBeaconCodeForTarget(target)
 
 	return CommandStatus{
 		Clear:     ClearAll,
