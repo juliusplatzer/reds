@@ -12,6 +12,8 @@
 
 package platform
 
+import redsmath "github.com/juliusplatzer/reds/math"
+
 // Platform abstracts platform-specific features: creating a window, running
 // the ImGui frame lifecycle, and presenting rendered frames.
 type Platform interface {
@@ -77,6 +79,9 @@ type Platform interface {
 	// GetMouse returns the current frame's mouse state in logical window
 	// coordinates.
 	GetMouse() MouseState
+
+	// SetMousePosition moves the OS cursor in logical window coordinates.
+	SetMousePosition(pos redsmath.Vec2)
 
 	// GetKeyboard returns the current frame's tracked keyboard state.
 	GetKeyboard() KeyboardState

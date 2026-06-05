@@ -816,6 +816,13 @@ func (p *PreviewArea) SetLocation(pos redsmath.Vec2, displaySize redsmath.Vec2) 
 	p.list.SetLocation(pos)
 }
 
+func (p *PreviewArea) RepositionSize() redsmath.Vec2 {
+	if p == nil {
+		return redsmath.Vec2{}
+	}
+	return p.list.style.RepositionSize
+}
+
 func (p *PreviewArea) SetBrightness(brightness int) {
 	if p == nil {
 		return

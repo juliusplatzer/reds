@@ -22,6 +22,8 @@ const (
 	CommandModeTrackSuspend
 	CommandModeInitiateControl
 	CommandModeTerminateControl
+	CommandModeMultiFunction
+	CommandModePreviewReposition
 )
 
 type CommandClear int
@@ -47,6 +49,8 @@ const (
 )
 
 type AircraftID string
+
+type DisplayPoint redsmath.Vec2
 
 type LeaderDirectionInput struct {
 	Digit     rune
@@ -424,6 +428,29 @@ func (rightSlewMatcher) validate() error      { return nil }
 func (rightSlewMatcher) goType() reflect.Type { return reflect.TypeFor[*Target]() }
 func (rightSlewMatcher) consumesClick() bool  { return true }
 
+type displaySlewMatcher struct{}
+
+func (displaySlewMatcher) match(
+	_ *ASDEXPane,
+	_ *panes.Context,
+	input *CommandInput,
+	text string,
+) (*matchResult, error) {
+	if input == nil || input.clickKind != CommandClickLeft {
+		return nil, nil
+	}
+
+	return &matchResult{
+		values:    []any{DisplayPoint(input.mousePosition)},
+		remaining: text,
+		matched:   true,
+	}, nil
+}
+
+func (displaySlewMatcher) validate() error      { return nil }
+func (displaySlewMatcher) goType() reflect.Type { return reflect.TypeFor[DisplayPoint]() }
+func (displaySlewMatcher) consumesClick() bool  { return true }
+
 type ldrDirMatcher struct{}
 
 func (ldrDirMatcher) match(
@@ -682,6 +709,8 @@ func makeMatchers(spec string) ([]matcher, error) {
 				matchers = append(matchers, slewMatcher{})
 			case "R SLEW":
 				matchers = append(matchers, rightSlewMatcher{})
+			case "DISPLAY SLEW":
+				matchers = append(matchers, displaySlewMatcher{})
 			default:
 				matchers = append(matchers, literalMatcher{text: "[" + name + "]"})
 			}
@@ -931,6 +960,8 @@ func (ap *ASDEXPane) applyCommandStatus(status CommandStatus) {
 		ap.commandMode = CommandModeNone
 		ap.initControlEntry = nil
 		ap.termControlEntry = nil
+		ap.multiFunction = nil
+		ap.previewReposition = nil
 		ap.commandEntry.Clear()
 	case ClearInput:
 		ap.commandEntry.Clear()
@@ -957,6 +988,8 @@ func (ap *ASDEXPane) consumeOpsHotkeys(
 		command = "[TRK SUSP]"
 	case ctx.Keyboard.WasPressed(platform.KeyF5):
 		command = "[TERM CNTL]"
+	case ctx.Keyboard.WasPressed(platform.KeyF7):
+		command = "[MULT FUNC]"
 	case ctx.Keyboard.WasPressed(platform.KeyF10):
 		command = "[MAP THEME]"
 	default:
