@@ -72,6 +72,7 @@ const (
 	KeyF11
 	KeyF12
 	KeyAlt
+	KeyShift
 )
 
 // KeyboardState is the keyboard input for one frame.
