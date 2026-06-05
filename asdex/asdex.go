@@ -1,6 +1,7 @@
 package asdex
 
 import (
+	"encoding/json"
 	"fmt"
 	stdmath "math"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"github.com/juliusplatzer/reds/platform"
 	"github.com/juliusplatzer/reds/radar"
 	"github.com/juliusplatzer/reds/renderer"
+	"github.com/juliusplatzer/reds/util"
 )
 
 type Mode int
@@ -29,6 +31,9 @@ const (
 	brightnessFloorDefault = 20
 
 	rightSlewDragThresholdPixels = float32(5)
+
+	aircraftCoastDelay = 60 * time.Second
+	coastDropLifetime  = 45 * time.Second
 )
 
 const (
@@ -41,8 +46,9 @@ const (
 	zTempMapText    renderer.Z = -680
 	zDBAreas        renderer.Z = -600
 
-	zTargets    renderer.Z = -500
-	zDatablocks renderer.Z = -480
+	zTargets         renderer.Z = -500
+	zSuspendedLabels renderer.Z = -499
+	zDatablocks      renderer.Z = -480
 
 	zWindowBorders renderer.Z = -300
 	zAlertMessage  renderer.Z = -210
@@ -59,13 +65,14 @@ func windowZ(stackIndex int, localZ renderer.Z) renderer.Z {
 }
 
 type ASDEXPane struct {
-	airport       string
-	mode          Mode
-	videomap      *VideoMap
-	targets       TargetStore
-	smes          *redsnet.SmesClient
-	fonts         fontCache
-	eramTextFonts fontCache
+	airport           string
+	configAirportCode string
+	mode              Mode
+	videomap          *VideoMap
+	targets           TargetStore
+	smes              *redsnet.SmesClient
+	fonts             fontCache
+	eramTextFonts     fontCache
 
 	cursors    CursorSet
 	cursorMode CursorMode
@@ -75,10 +82,14 @@ type ASDEXPane struct {
 	previewArea             PreviewArea
 	coastList               CoastList
 	showCoastList           bool
+	hoveredCoastListTarget  string
 
-	commandMode     CommandMode
-	datablockEdit   *DatablockEditCommand
-	editingTargetID string
+	commandMode      CommandMode
+	commandEntry     CommandTextEntry
+	datablockEdit    *DatablockEditCommand
+	editingTargetID  string
+	initControlEntry *CoastListIDEntryCommand
+	termControlEntry *CoastListIDEntryCommand
 
 	rightClickStart     redsmath.Vec2
 	rightClickCandidate bool
@@ -122,19 +133,21 @@ func NewPane(airport string) (*ASDEXPane, error) {
 	}
 	preview.SetSystemResponse("CRITICAL FAULT START")
 	coastList := NewCoastList()
+	configAirport := loadConfigAirportCode(airport)
 
 	client := redsnet.NewSmesClient(targetWebSocketURL())
 	client.SetAirport(airport)
 	client.Start()
 
 	return &ASDEXPane{
-		airport:       airport,
-		mode:          ModeDay,
-		videomap:      vm,
-		targets:       NewTargetStore(),
-		smes:          client,
-		fonts:         fonts,
-		eramTextFonts: eramTextFonts,
+		airport:           airport,
+		configAirportCode: configAirport,
+		mode:              ModeDay,
+		videomap:          vm,
+		targets:           NewTargetStore(),
+		smes:              client,
+		fonts:             fonts,
+		eramTextFonts:     eramTextFonts,
 
 		datablockSettings:       DefaultDataBlockSettings(),
 		datablockTimeshareStart: time.Now(),
@@ -176,8 +189,18 @@ func (p *ASDEXPane) Draw(ctx *panes.Context, zcb *renderer.ZCmdBuffer) {
 		p.rotation,
 	)
 
+	now := time.Now().UTC()
+	p.targets.ExpireSuspendedTracks(now)
+	p.targets.UpdateCoastDropTracks(
+		now,
+		aircraftCoastDelay,
+		coastDropLifetime,
+		p.isDestinationCurrentAirport,
+	)
+	p.consumeOpsHotkeys(ctx, transforms)
 	p.coastList.SetVisible(p.showCoastList)
-	p.coastList.SetEntries(p.buildCoastSuspendEntries(time.Now().UTC()))
+	p.coastList.SetEntries(p.buildCoastSuspendEntries(now))
+	p.updateCoastListHover(ctx)
 	p.updateRightClickGesture(ctx)
 
 	if p.datablockEdit != nil {
@@ -198,6 +221,8 @@ func (p *ASDEXPane) Draw(ctx *panes.Context, zcb *renderer.ZCmdBuffer) {
 		}
 	}
 	p.applyCurrentCursor(ctx)
+	p.coastList.SetEntries(p.buildCoastSuspendEntries(now))
+	targets := p.targets.All()
 
 	cb := zcb.At(windowZ(0, zVideoMap))
 	x, y, w, h := ctx.PaneFramebufferRect()
@@ -214,22 +239,36 @@ func (p *ASDEXPane) Draw(ctx *panes.Context, zcb *renderer.ZCmdBuffer) {
 	targetCB.Scissor(x, y, w, h)
 	transforms.LoadWorldViewingMatrices(targetCB)
 	DrawTargets(
-		p.targets.All(),
+		targets,
 		p.targets.History(),
 		targetCB,
 		TargetDrawOptions{
-			VectorSeconds: 3,
-			Brightness:    brightnessDefault,
+			VectorSeconds:    3,
+			Brightness:       brightnessDefault,
+			ScopeRotationDeg: int(p.rotation),
 		},
 	)
 	targetCB.DisableScissor()
+
+	suspendedLabelCB := zcb.At(windowZ(0, zSuspendedLabels))
+	suspendedLabelCB.Viewport(x, y, w, h)
+	suspendedLabelCB.Scissor(x, y, w, h)
+	transforms.LoadWindowViewingMatrices(suspendedLabelCB)
+	DrawSuspendedTargetLabels(
+		targets,
+		suspendedLabelCB,
+		transforms,
+		p.fonts.font,
+		p.fonts.textureForSize(ctx.Renderer, suspendedLabelFontSize),
+	)
+	suspendedLabelCB.DisableScissor()
 
 	datablockSettings := p.dataBlockSettings()
 	dbCB := zcb.At(windowZ(0, zDatablocks))
 	dbCB.Viewport(x, y, w, h)
 	dbCB.Scissor(x, y, w, h)
 	DrawDatablocks(
-		p.targets.All(),
+		targets,
 		dbCB,
 		transforms,
 		DataBlockDrawOptions{
@@ -277,7 +316,7 @@ func (p *ASDEXPane) Draw(ctx *panes.Context, zcb *renderer.ZCmdBuffer) {
 	}
 	listCB.DisableScissor()
 
-	if p.datablockEdit != nil {
+	if cursorLine, cursorColumn, ok := p.activeCommandCursor(); ok {
 		cursorCB := zcb.At(windowZ(0, zPreviewCursor))
 		cursorCB.Viewport(x, y, w, h)
 		cursorCB.Scissor(x, y, w, h)
@@ -290,8 +329,8 @@ func (p *ASDEXPane) Draw(ctx *panes.Context, zcb *renderer.ZCmdBuffer) {
 			builder,
 			p.fonts.font,
 			ctx.PaneSize(),
-			p.datablockEdit.CursorLine(),
-			p.datablockEdit.CursorColumn(),
+			cursorLine,
+			cursorColumn,
 			p.previewArea.BaseLineCount(),
 		)
 		builder.GenerateCommands(cursorCB)
@@ -325,6 +364,54 @@ func (p *ASDEXPane) timesharePrimary(now time.Time) bool {
 		elapsed = 0
 	}
 	return int(elapsed/interval)%2 == 0
+}
+
+func loadConfigAirportCode(airport string) string {
+	airport = strings.ToUpper(strings.TrimSpace(airport))
+	if airport == "" {
+		return ""
+	}
+
+	fallback := strings.TrimPrefix(airport, "K")
+	path := "resources/configs/asdex/" + airport + ".json"
+	if !util.ResourceExists(path) {
+		return fallback
+	}
+
+	var cfg struct {
+		Airport string `json:"airport"`
+	}
+	if err := json.Unmarshal(util.LoadResourceBytes(path), &cfg); err != nil {
+		return fallback
+	}
+
+	code := strings.ToUpper(strings.TrimSpace(cfg.Airport))
+	if code != "" {
+		return code
+	}
+	return fallback
+}
+
+func (p *ASDEXPane) isDestinationCurrentAirport(target *Target) bool {
+	if p == nil || target == nil {
+		return false
+	}
+
+	fix := strings.ToUpper(strings.TrimSpace(target.Fix))
+	if fix == "" {
+		return false
+	}
+
+	configAirport := strings.ToUpper(strings.TrimSpace(p.configAirportCode))
+	airport := strings.ToUpper(strings.TrimSpace(p.airport))
+	airportNoK := airport
+	if len(airportNoK) == 4 && strings.HasPrefix(airportNoK, "K") {
+		airportNoK = airportNoK[1:]
+	}
+
+	return (configAirport != "" && fix == configAirport) ||
+		fix == airportNoK ||
+		fix == airport
 }
 
 func (p *ASDEXPane) ensureCursorsLoaded(ctx *panes.Context) {
@@ -364,7 +451,9 @@ func (p *ASDEXPane) resolveCursorMode(ctx *panes.Context) CursorMode {
 	}
 	if p != nil && p.showCoastList && ctx != nil && ctx.Mouse != nil {
 		hit := p.coastList.HitTest(ctx.Mouse.Pos, p.fonts.font, p.eramTextFonts.font, ctx.PaneSize())
-		if hit.Kind == CoastListHitEntry && hit.Status == CoastListEntrySuspended {
+		if hit.Kind == CoastListHitEntry &&
+			(hit.Status == CoastListEntrySuspended ||
+				p.commandMode == CommandModeTerminateControl) {
 			return CursorModeSelect
 		}
 	}
@@ -441,19 +530,60 @@ func (p *ASDEXPane) highlightedTarget() *Target {
 }
 
 func (p *ASDEXPane) activeCommandLines() []string {
-	if p == nil || p.datablockEdit == nil {
+	if p == nil {
 		return nil
 	}
-	return p.datablockEdit.DisplayLines()
+	if p.datablockEdit != nil {
+		return p.datablockEdit.DisplayLines()
+	}
+	if p.initControlEntry != nil {
+		return p.initControlEntry.DisplayLines()
+	}
+	if p.termControlEntry != nil {
+		return p.termControlEntry.DisplayLines()
+	}
+	if p.commandMode == CommandModeTrackSuspend {
+		return []string{"TRK SUSP"}
+	}
+	if !p.commandEntry.Empty() {
+		return p.commandEntry.DisplayLines()
+	}
+	return nil
+}
+
+func (p *ASDEXPane) activeCommandCursor() (line int, column int, ok bool) {
+	if p == nil {
+		return 0, 0, false
+	}
+	if p.datablockEdit != nil {
+		return p.datablockEdit.CursorLine(), p.datablockEdit.CursorColumn(), true
+	}
+	if p.initControlEntry != nil {
+		return p.initControlEntry.CursorLine(), p.initControlEntry.CursorColumn(), true
+	}
+	if p.termControlEntry != nil {
+		return p.termControlEntry.CursorLine(), p.termControlEntry.CursorColumn(), true
+	}
+	if !p.commandEntry.Empty() {
+		return p.commandEntry.CursorLine(), p.commandEntry.CursorColumn(), true
+	}
+	return 0, 0, false
 }
 
 func (p *ASDEXPane) cancelDatablockEdit() {
+	p.cancelActiveCommand()
+}
+
+func (p *ASDEXPane) cancelActiveCommand() {
 	if p == nil {
 		return
 	}
+	p.commandMode = CommandModeNone
 	p.datablockEdit = nil
 	p.editingTargetID = ""
-	p.commandMode = CommandModeNone
+	p.initControlEntry = nil
+	p.termControlEntry = nil
+	p.commandEntry.Clear()
 	p.previewArea.SetSystemResponse("")
 }
 
@@ -463,6 +593,24 @@ func (p *ASDEXPane) consumeCommandKeyboard(ctx *panes.Context) bool {
 	}
 	if p.datablockEdit != nil {
 		return p.handleDatablockEditKeyboard(ctx)
+	}
+	if p.initControlEntry != nil {
+		return p.handleInitControlKeyboard(ctx)
+	}
+	if p.termControlEntry != nil {
+		return p.handleTerminateControlKeyboard(ctx)
+	}
+	if p.commandMode != CommandModeNone {
+		keyboard := ctx.Keyboard
+		if keyboard.WasPressed(platform.KeyEscape) ||
+			keyboard.WasPressed(platform.KeyBackspace) ||
+			keyboard.WasPressed(platform.KeyDelete) {
+			p.cancelActiveCommand()
+			return true
+		}
+	}
+	if p.commandMode == CommandModeNone {
+		return p.handleNormalCommandKeyboard(ctx)
 	}
 	return false
 }
@@ -506,6 +654,117 @@ func (p *ASDEXPane) handleDatablockEditKeyboard(ctx *panes.Context) bool {
 	handled := false
 	for _, r := range keyboard.Text {
 		edit.Insert(r)
+		handled = true
+	}
+	return handled
+}
+
+func (p *ASDEXPane) handleInitControlKeyboard(ctx *panes.Context) bool {
+	if p == nil || p.initControlEntry == nil || ctx == nil || ctx.Keyboard == nil {
+		return false
+	}
+
+	keyboard := ctx.Keyboard
+	entry := p.initControlEntry
+	switch {
+	case keyboard.WasPressed(platform.KeyEscape):
+		p.cancelActiveCommand()
+		return true
+	case keyboard.WasPressed(platform.KeyEnter), keyboard.WasPressed(platform.KeyKeypadEnter):
+		p.submitInitControlEntry()
+		return true
+	case keyboard.WasPressed(platform.KeyLeft):
+		entry.MoveLeft()
+		return true
+	case keyboard.WasPressed(platform.KeyRight):
+		entry.MoveRight()
+		return true
+	case keyboard.WasPressed(platform.KeyBackspace):
+		entry.Backspace()
+		return true
+	case keyboard.WasPressed(platform.KeyDelete):
+		entry.DeleteForward()
+		return true
+	}
+
+	handled := false
+	for _, r := range keyboard.Text {
+		entry.Insert(r)
+		p.previewArea.SetSystemResponse("")
+		handled = true
+	}
+	return handled
+}
+
+func (p *ASDEXPane) handleTerminateControlKeyboard(ctx *panes.Context) bool {
+	if p == nil || p.termControlEntry == nil || ctx == nil || ctx.Keyboard == nil {
+		return false
+	}
+
+	keyboard := ctx.Keyboard
+	entry := p.termControlEntry
+	switch {
+	case keyboard.WasPressed(platform.KeyEscape):
+		p.cancelActiveCommand()
+		return true
+	case keyboard.WasPressed(platform.KeyEnter), keyboard.WasPressed(platform.KeyKeypadEnter):
+		p.submitTerminateControlEntry()
+		return true
+	case keyboard.WasPressed(platform.KeyLeft):
+		entry.MoveLeft()
+		return true
+	case keyboard.WasPressed(platform.KeyRight):
+		entry.MoveRight()
+		return true
+	case keyboard.WasPressed(platform.KeyBackspace):
+		entry.Backspace()
+		return true
+	case keyboard.WasPressed(platform.KeyDelete):
+		entry.DeleteForward()
+		return true
+	}
+
+	handled := false
+	for _, r := range keyboard.Text {
+		entry.Insert(r)
+		p.previewArea.SetSystemResponse("")
+		handled = true
+	}
+	return handled
+}
+
+func (p *ASDEXPane) handleNormalCommandKeyboard(ctx *panes.Context) bool {
+	if p == nil || ctx == nil || ctx.Keyboard == nil {
+		return false
+	}
+
+	keyboard := ctx.Keyboard
+	switch {
+	case keyboard.WasPressed(platform.KeyEscape):
+		if !p.commandEntry.Empty() {
+			p.commandEntry.Clear()
+			p.previewArea.SetSystemResponse("")
+			return true
+		}
+		return false
+	case keyboard.WasPressed(platform.KeyLeft):
+		p.commandEntry.MoveLeft()
+		return !p.commandEntry.Empty()
+	case keyboard.WasPressed(platform.KeyRight):
+		p.commandEntry.MoveRight()
+		return !p.commandEntry.Empty()
+	case keyboard.WasPressed(platform.KeyBackspace):
+		p.commandEntry.Backspace()
+		return true
+	case keyboard.WasPressed(platform.KeyDelete):
+		p.commandEntry.DeleteForward()
+		return true
+	}
+
+	handled := false
+	for _, r := range keyboard.Text {
+		p.commandEntry.Insert(r)
+		p.previewArea.SetSystemResponse("")
 		handled = true
 	}
 	return handled
@@ -587,9 +846,29 @@ func (p *ASDEXPane) buildCoastSuspendEntries(now time.Time) []CoastListEntry {
 			continue
 		}
 
+		if target.ID == p.hoveredCoastListTarget {
+			entry.Selected = true
+		}
 		entries = append(entries, entry)
 	}
 	return entries
+}
+
+func (p *ASDEXPane) updateCoastListHover(ctx *panes.Context) {
+	if p == nil {
+		return
+	}
+	p.hoveredCoastListTarget = ""
+	if ctx == nil || ctx.Mouse == nil || !p.showCoastList {
+		return
+	}
+
+	hit := p.coastList.HitTest(ctx.Mouse.Pos, p.fonts.font, p.eramTextFonts.font, ctx.PaneSize())
+	if hit.Kind == CoastListHitEntry &&
+		(hit.Status == CoastListEntrySuspended ||
+			p.commandMode == CommandModeTerminateControl) {
+		p.hoveredCoastListTarget = hit.TargetID
+	}
 }
 
 func (p *ASDEXPane) consumeCoastListClicks(ctx *panes.Context) bool {
@@ -613,7 +892,49 @@ func (p *ASDEXPane) consumeCoastListClicks(ctx *panes.Context) bool {
 	case CoastListHitDownArrow:
 		p.coastList.PageDown(p.fonts.font, ctx.PaneSize())
 	case CoastListHitEntry:
-		// List slew precedence is added with retained coast/drop state.
+		target := p.targets.TargetByID(hit.TargetID)
+		if target == nil {
+			return true
+		}
+
+		if p.commandMode == CommandModeTerminateControl {
+			status, err, handled := p.tryExecuteUserCommand(
+				ctx,
+				"",
+				target,
+				CommandClickLeft,
+				ctx.Mouse.Pos,
+				radar.ScopeTransformations{},
+			)
+			if err != nil {
+				p.previewArea.SetSystemResponse(err.Error())
+				return true
+			}
+			if handled {
+				p.applyCommandStatus(status)
+			}
+			return true
+		}
+
+		if hit.Status != CoastListEntrySuspended {
+			return true
+		}
+
+		status, err, handled := p.tryExecuteUserCommand(
+			ctx,
+			"",
+			target,
+			CommandClickLeft,
+			ctx.Mouse.Pos,
+			radar.ScopeTransformations{},
+		)
+		if err != nil {
+			p.previewArea.SetSystemResponse(err.Error())
+			return true
+		}
+		if handled {
+			p.applyCommandStatus(status)
+		}
 	}
 	return true
 }

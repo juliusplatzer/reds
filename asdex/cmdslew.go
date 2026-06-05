@@ -13,6 +13,13 @@ import (
 func registerSlewCommands() {
 	registerCommand(
 		CommandModeNone,
+		"[ACID][SLEW]",
+		func(ap *ASDEXPane, ctx *panes.Context, acid AircraftID, target *Target) CommandStatus {
+			return ap.cmdManualTagUnknownTarget(ctx, acid, target)
+		},
+	)
+	registerCommand(
+		CommandModeNone,
 		"[SLEW]",
 		func(ap *ASDEXPane, ctx *panes.Context, target *Target) CommandStatus {
 			return ap.cmdBareAircraftSlew(ctx, target)
@@ -35,8 +42,19 @@ func (ap *ASDEXPane) cmdBareAircraftSlew(
 		return CommandStatus{}
 	}
 
-	// Later passes add suspended and dropped target precedence here.
-	if !targetHasDatablock(classifyTarget(target)) {
+	if target.Suspended {
+		ap.targets.UnsuspendTarget(target.ID)
+		return CommandStatus{
+			Output:    "",
+			HasOutput: true,
+		}
+	}
+
+	if target.Coasting || target.Dropped {
+		return CommandStatus{}
+	}
+
+	if !targetCanHaveDataBlock(target) {
 		return CommandStatus{}
 	}
 
@@ -57,22 +75,55 @@ func (ap *ASDEXPane) cmdRSlew(
 
 	edit := NewDatablockEditCommandFromTarget(target)
 	ap.commandMode = CommandModeEditDatablockFields
+	ap.commandEntry.Clear()
 	ap.editingTargetID = target.ID
 	ap.datablockEdit = &edit
+	ap.initControlEntry = nil
+	ap.termControlEntry = nil
 	ap.previewArea.SetSystemResponse("")
 	ap.clearHighlightedTarget()
 
 	return CommandStatus{Clear: ClearNone}
 }
 
+func (ap *ASDEXPane) cmdManualTagUnknownTarget(
+	_ *panes.Context,
+	acid AircraftID,
+	target *Target,
+) CommandStatus {
+	if ap == nil {
+		return CommandStatus{Clear: ClearAll}
+	}
+
+	aircraftID := strings.ToUpper(strings.TrimSpace(string(acid)))
+	if aircraftID == "" {
+		return commandOutputClearAll("INVALID ENTRY")
+	}
+	if target == nil {
+		return commandOutputClearAll("NO SLEW")
+	}
+	if !targetIsManualTagCandidate(target) {
+		return commandOutputClearAll("INVALID ENTRY")
+	}
+	if !ap.targets.ManualTagUnknownTarget(target.ID, aircraftID) {
+		return commandOutputClearAll("INVALID ENTRY")
+	}
+
+	return CommandStatus{
+		Clear:     ClearAll,
+		Output:    "",
+		HasOutput: true,
+	}
+}
+
 func targetCanEditDBFields(target *Target) bool {
 	if target == nil {
 		return false
 	}
-	if target.Suspended || target.Coasting {
+	if target.Suspended || target.Coasting || target.Dropped {
 		return false
 	}
-	return targetHasDatablock(classifyTarget(target))
+	return targetCanHaveDataBlock(target)
 }
 
 type EditedDBFields struct {

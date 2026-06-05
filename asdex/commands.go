@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"unicode"
 
 	redsmath "github.com/juliusplatzer/reds/math"
 	"github.com/juliusplatzer/reds/panes"
@@ -17,6 +18,9 @@ type CommandMode int
 const (
 	CommandModeNone CommandMode = iota
 	CommandModeEditDatablockFields
+	CommandModeTrackSuspend
+	CommandModeInitiateControl
+	CommandModeTerminateControl
 )
 
 type CommandClear int
@@ -32,6 +36,196 @@ type CommandStatus struct {
 
 	Output    string
 	HasOutput bool
+}
+
+const maxManualTagAircraftIDLength = 7
+
+type AircraftID string
+
+type CommandTextEntryKind int
+
+const (
+	CommandTextEntryNone CommandTextEntryKind = iota
+	CommandTextEntryACID
+	CommandTextEntryLeaderDirection
+)
+
+type CommandTextEntry struct {
+	kind   CommandTextEntryKind
+	value  string
+	cursor int
+}
+
+func (entry *CommandTextEntry) Empty() bool {
+	return entry == nil ||
+		entry.kind == CommandTextEntryNone ||
+		strings.TrimSpace(entry.value) == ""
+}
+
+func (entry *CommandTextEntry) Kind() CommandTextEntryKind {
+	if entry == nil {
+		return CommandTextEntryNone
+	}
+	return entry.kind
+}
+
+func (entry *CommandTextEntry) Value() string {
+	if entry == nil {
+		return ""
+	}
+	return strings.ToUpper(strings.TrimSpace(entry.value))
+}
+
+func (entry *CommandTextEntry) DisplayLines() []string {
+	if entry == nil || entry.kind == CommandTextEntryNone {
+		return nil
+	}
+
+	switch entry.kind {
+	case CommandTextEntryACID:
+		return []string{"ACID", entry.value}
+	case CommandTextEntryLeaderDirection:
+		return []string{"LDR DIR", entry.value}
+	default:
+		return nil
+	}
+}
+
+func (entry *CommandTextEntry) CursorLine() int {
+	if entry == nil || entry.kind == CommandTextEntryNone {
+		return 0
+	}
+	return 2
+}
+
+func (entry *CommandTextEntry) CursorColumn() int {
+	if entry == nil {
+		return 0
+	}
+	return entry.cursor
+}
+
+func (entry *CommandTextEntry) Insert(r rune) {
+	if entry == nil {
+		return
+	}
+
+	r = unicode.ToUpper(r)
+
+	if entry.kind == CommandTextEntryNone {
+		if unicode.IsLetter(r) {
+			entry.StartACID(r)
+		}
+		return
+	}
+
+	switch entry.kind {
+	case CommandTextEntryACID:
+		entry.insertACIDRune(r)
+	case CommandTextEntryLeaderDirection:
+		// Reserved for leader-direction command input.
+	}
+}
+
+func (entry *CommandTextEntry) StartACID(r rune) {
+	if entry == nil {
+		return
+	}
+
+	entry.Clear()
+	r = unicode.ToUpper(r)
+	if !unicode.IsLetter(r) {
+		return
+	}
+
+	entry.kind = CommandTextEntryACID
+	entry.value = string(r)
+	entry.cursor = 1
+}
+
+func (entry *CommandTextEntry) insertACIDRune(r rune) {
+	if !unicode.IsLetter(r) && !unicode.IsDigit(r) {
+		return
+	}
+
+	value := []rune(entry.value)
+	if len(value) >= maxManualTagAircraftIDLength {
+		return
+	}
+	entry.cursor = clampInt(entry.cursor, 0, len(value))
+
+	value = append(value[:entry.cursor], append([]rune{r}, value[entry.cursor:]...)...)
+	entry.value = string(value)
+	entry.cursor++
+}
+
+func (entry *CommandTextEntry) Backspace() {
+	if entry == nil || entry.cursor <= 0 {
+		return
+	}
+
+	value := []rune(entry.value)
+	if entry.cursor > len(value) {
+		entry.cursor = len(value)
+	}
+	if entry.cursor <= 0 {
+		return
+	}
+
+	entry.cursor--
+	value = append(value[:entry.cursor], value[entry.cursor+1:]...)
+	if len(value) == 0 {
+		entry.Clear()
+		return
+	}
+	entry.value = string(value)
+}
+
+func (entry *CommandTextEntry) DeleteForward() {
+	if entry == nil {
+		return
+	}
+
+	value := []rune(entry.value)
+	entry.cursor = clampInt(entry.cursor, 0, len(value))
+	if entry.cursor >= len(value) {
+		return
+	}
+
+	value = append(value[:entry.cursor], value[entry.cursor+1:]...)
+	if len(value) == 0 {
+		entry.Clear()
+		return
+	}
+	entry.value = string(value)
+}
+
+func (entry *CommandTextEntry) MoveLeft() {
+	if entry == nil {
+		return
+	}
+	if entry.cursor > 0 {
+		entry.cursor--
+	}
+}
+
+func (entry *CommandTextEntry) MoveRight() {
+	if entry == nil {
+		return
+	}
+	value := []rune(entry.value)
+	if entry.cursor < len(value) {
+		entry.cursor++
+	}
+}
+
+func (entry *CommandTextEntry) Clear() {
+	if entry == nil {
+		return
+	}
+	entry.kind = CommandTextEntryNone
+	entry.value = ""
+	entry.cursor = 0
 }
 
 func commandOutput(text string) CommandStatus {
@@ -147,6 +341,43 @@ func (rightSlewMatcher) validate() error      { return nil }
 func (rightSlewMatcher) goType() reflect.Type { return reflect.TypeFor[*Target]() }
 func (rightSlewMatcher) consumesClick() bool  { return true }
 
+type acidMatcher struct{}
+
+func (acidMatcher) match(
+	_ *ASDEXPane,
+	_ *panes.Context,
+	_ *CommandInput,
+	text string,
+) (*matchResult, error) {
+	text = strings.ToUpper(strings.TrimSpace(text))
+	if text == "" {
+		return nil, nil
+	}
+
+	runes := []rune(text)
+	if len(runes) > maxManualTagAircraftIDLength {
+		return nil, nil
+	}
+	if !unicode.IsLetter(runes[0]) {
+		return nil, nil
+	}
+	for _, r := range runes {
+		if !unicode.IsLetter(r) && !unicode.IsDigit(r) {
+			return nil, nil
+		}
+	}
+
+	return &matchResult{
+		values:    []any{AircraftID(text)},
+		remaining: "",
+		matched:   true,
+	}, nil
+}
+
+func (acidMatcher) validate() error      { return nil }
+func (acidMatcher) goType() reflect.Type { return reflect.TypeFor[AircraftID]() }
+func (acidMatcher) consumesClick() bool  { return false }
+
 type handlerArgumentKind int
 
 const (
@@ -177,6 +408,7 @@ var (
 
 func InitCommands() {
 	initCommandsOnce.Do(func() {
+		registerOpsCommands()
 		registerSlewCommands()
 	})
 }
@@ -250,12 +482,14 @@ func makeMatchers(spec string) ([]matcher, error) {
 			}
 
 			switch name := remaining[1:end]; name {
+			case "ACID":
+				matchers = append(matchers, acidMatcher{})
 			case "SLEW":
 				matchers = append(matchers, slewMatcher{})
 			case "R SLEW":
 				matchers = append(matchers, rightSlewMatcher{})
 			default:
-				return nil, fmt.Errorf("unknown command matcher [%s]", name)
+				matchers = append(matchers, literalMatcher{text: "[" + name + "]"})
 			}
 			remaining = remaining[end+1:]
 			continue
@@ -495,10 +729,55 @@ func (ap *ASDEXPane) applyCommandStatus(status CommandStatus) {
 	switch status.Clear {
 	case ClearAll:
 		ap.commandMode = CommandModeNone
+		ap.initControlEntry = nil
+		ap.termControlEntry = nil
+		ap.commandEntry.Clear()
 	case ClearInput:
-		// Later command-entry text can be cleared without leaving the mode.
+		ap.commandEntry.Clear()
 	case ClearNone:
 	}
+}
+
+func (ap *ASDEXPane) consumeOpsHotkeys(
+	ctx *panes.Context,
+	transforms radar.ScopeTransformations,
+) bool {
+	if ap == nil || ctx == nil || ctx.Keyboard == nil || ap.datablockEdit != nil {
+		return false
+	}
+	if ap.commandMode != CommandModeNone {
+		return false
+	}
+
+	command := ""
+	switch {
+	case ctx.Keyboard.WasPressed(platform.KeyF3):
+		command = "[INIT CNTL]"
+	case ctx.Keyboard.WasPressed(platform.KeyF4):
+		command = "[TRK SUSP]"
+	case ctx.Keyboard.WasPressed(platform.KeyF5):
+		command = "[TERM CNTL]"
+	default:
+		return false
+	}
+
+	status, err, handled := ap.tryExecuteUserCommand(
+		ctx,
+		command,
+		nil,
+		CommandClickNone,
+		redsmath.Vec2{},
+		transforms,
+	)
+	if err != nil {
+		ap.previewArea.SetSystemResponse(err.Error())
+		return true
+	}
+	if handled {
+		ap.applyCommandStatus(status)
+		return true
+	}
+	return false
 }
 
 func (ap *ASDEXPane) consumeCommandClicks(
@@ -535,10 +814,45 @@ func (ap *ASDEXPane) consumeCommandClicks(
 
 	target := ap.highlightedTarget()
 	if target == nil {
+		if clickKind == CommandClickLeft {
+			if ap.commandMode == CommandModeNone && !ap.commandEntry.Empty() {
+				ap.commandEntry.Clear()
+				ap.applyCommandStatus(commandOutputClearAll("NO SLEW"))
+				return true
+			}
+
+			switch ap.commandMode {
+			case CommandModeTrackSuspend:
+				ap.applyCommandStatus(commandOutputClearAll("NO SLEW"))
+				return true
+			case CommandModeInitiateControl:
+				ap.initControlEntry = nil
+				ap.applyCommandStatus(commandOutputClearAll("NO SLEW"))
+				return true
+			case CommandModeTerminateControl:
+				ap.termControlEntry = nil
+				ap.applyCommandStatus(commandOutputClearAll("NO SLEW"))
+				return true
+			}
+		}
 		return false
 	}
 
-	status, err, handled := ap.tryExecuteUserCommand(ctx, "", target, clickKind, mouse.Pos, transforms)
+	cmdText := ""
+	if ap.commandMode == CommandModeNone &&
+		clickKind == CommandClickLeft &&
+		ap.commandEntry.Kind() == CommandTextEntryACID {
+		cmdText = ap.commandEntry.Value()
+	}
+
+	status, err, handled := ap.tryExecuteUserCommand(
+		ctx,
+		cmdText,
+		target,
+		clickKind,
+		mouse.Pos,
+		transforms,
+	)
 	if err != nil {
 		ap.previewArea.SetSystemResponse(err.Error())
 		return true
