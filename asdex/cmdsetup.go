@@ -245,7 +245,7 @@ func registerSetupCommands() {
 
 	registerCommand(
 		CommandModeNone,
-		"[MAP ROTATE]",
+		"[ROTATE]",
 		func(ap *ASDEXPane, ctx *panes.Context) CommandStatus {
 			return ap.cmdMapRotate(ctx)
 		},
