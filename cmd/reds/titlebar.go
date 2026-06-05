@@ -24,6 +24,11 @@ var (
 	titleBarFg         = imgui.Vec4{X: 1, Y: 1, Z: 1, W: 1}
 	titleBarHover      = imgui.Vec4{X: 37.0 / 255.0, Y: 37.0 / 255.0, Z: 37.0 / 255.0, W: 1}
 	titleBarCloseHover = imgui.Vec4{X: 232.0 / 255.0, Y: 17.0 / 255.0, Z: 35.0 / 255.0, W: 1}
+
+	titleBarMenuBg     = imgui.Vec4{X: 61.0 / 255.0, Y: 61.0 / 255.0, Z: 76.0 / 255.0, W: 1}
+	titleBarMenuBorder = imgui.Vec4{X: 74.0 / 255.0, Y: 74.0 / 255.0, Z: 94.0 / 255.0, W: 1}
+	titleBarMenuHover  = imgui.Vec4{X: 76.0 / 255.0, Y: 79.0 / 255.0, Z: 98.0 / 255.0, W: 1}
+	titleBarMenuFg     = imgui.Vec4{X: 240.0 / 255.0, Y: 240.0 / 255.0, Z: 240.0 / 255.0, W: 1}
 )
 
 type titleBarAction int
@@ -196,8 +201,8 @@ func drawTitleBarMenuPopup(buttonMin, buttonMax imgui.Vec2) titleBarAction {
 	imgui.PushStyleVarVec2(imgui.StyleVarItemSpacing, imgui.Vec2{})
 	imgui.PushStyleVarFloat(imgui.StyleVarPopupRounding, 0)
 	imgui.PushStyleVarFloat(imgui.StyleVarPopupBorderSize, 1)
-	imgui.PushStyleColorVec4(imgui.ColPopupBg, titleBarBg)
-	imgui.PushStyleColorVec4(imgui.ColBorder, titleBarBg)
+	imgui.PushStyleColorVec4(imgui.ColPopupBg, titleBarMenuBg)
+	imgui.PushStyleColorVec4(imgui.ColBorder, titleBarMenuBorder)
 
 	action := titleBarActionNone
 	if imgui.BeginPopupV("##titlebar-menu-popup", flags) {
@@ -214,7 +219,7 @@ func drawTitleBarMenuPopup(buttonMin, buttonMax imgui.Vec2) titleBarAction {
 			imgui.WindowDrawList().AddRectFilledV(
 				rowMin,
 				rowMax,
-				imgui.ColorU32Vec4(titleBarHover),
+				imgui.ColorU32Vec4(titleBarMenuHover),
 				0,
 				imgui.DrawFlagsNone,
 			)
@@ -226,7 +231,7 @@ func drawTitleBarMenuPopup(buttonMin, buttonMax imgui.Vec2) titleBarAction {
 		}
 		imgui.WindowDrawList().AddTextVec2(
 			imgui.Vec2{X: rowMin.X + textPadX, Y: textY},
-			imgui.ColorU32Vec4(titleBarFg),
+			imgui.ColorU32Vec4(titleBarMenuFg),
 			"Switch Facility",
 		)
 
