@@ -281,6 +281,16 @@ func (g *glfwPlatform) GetMouse() MouseState {
 	return g.mouse
 }
 
+func (g *glfwPlatform) SetMousePosition(pos redsmath.Vec2) {
+	if g == nil || g.window == nil {
+		return
+	}
+
+	g.window.SetCursorPos(float64(pos.X), float64(pos.Y))
+	g.mouse.Pos = pos
+	g.mouse.Delta = redsmath.Vec2{}
+}
+
 func (g *glfwPlatform) GetKeyboard() KeyboardState {
 	return g.keyboard
 }

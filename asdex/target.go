@@ -1314,7 +1314,7 @@ var unknownMesh = polygonMesh{
 	Indices:  triangleFanIndices(len(unknownPolygon)),
 }
 
-const highlightRingRadiusFeet = 0.012 * feetPerNM
+const highlightRingRadiusFeet = 0.012 * redsmath.FeetPerNM
 
 var highlightRingPolygon = regularRingPolygon(20, highlightRingRadiusFeet)
 
@@ -1634,7 +1634,7 @@ func vectorEndFeet(
 	vectorSeconds int,
 ) redsmath.Vec2 {
 	distanceNM := groundSpeedKt * float32(vectorSeconds) / 3600
-	distanceFeet := distanceNM * feetPerNM
+	distanceFeet := distanceNM * redsmath.FeetPerNM
 	radians := float64(trackDeg) * stdmath.Pi / 180
 
 	return redsmath.Vec2{
@@ -1677,7 +1677,7 @@ func addTargetVectors(
 	builder.GenerateCommands(cb)
 }
 
-const historyDotRadiusFeet = 0.003 * feetPerNM
+const historyDotRadiusFeet = 0.003 * redsmath.FeetPerNM
 
 func addHistoryDots(
 	targets []*Target,

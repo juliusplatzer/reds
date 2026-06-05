@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode"
 
 	redsmath "github.com/juliusplatzer/reds/math"
 	redsnet "github.com/juliusplatzer/reds/net"
@@ -50,10 +51,11 @@ const (
 	zSuspendedLabels renderer.Z = -499
 	zDatablocks      renderer.Z = -480
 
-	zWindowBorders renderer.Z = -300
-	zAlertMessage  renderer.Z = -210
-	zPreviewArea   renderer.Z = -200
-	zPreviewCursor renderer.Z = -190
+	zWindowBorders            renderer.Z = -300
+	zAlertMessage             renderer.Z = -210
+	zPreviewArea              renderer.Z = -200
+	zPreviewCursor            renderer.Z = -190
+	zPreviewRepositionOutline renderer.Z = -189
 
 	zDCBBackground renderer.Z = -100
 	zDCBButtons    renderer.Z = -99
@@ -86,12 +88,14 @@ type ASDEXPane struct {
 	showCoastList           bool
 	hoveredCoastListTarget  string
 
-	commandMode      CommandMode
-	commandEntry     CommandTextEntry
-	datablockEdit    *DatablockEditCommand
-	editingTargetID  string
-	initControlEntry *CoastListIDEntryCommand
-	termControlEntry *CoastListIDEntryCommand
+	commandMode       CommandMode
+	commandEntry      CommandTextEntry
+	datablockEdit     *DatablockEditCommand
+	editingTargetID   string
+	initControlEntry  *CoastListIDEntryCommand
+	termControlEntry  *CoastListIDEntryCommand
+	multiFunction     *MultiFunctionCommand
+	previewReposition *PreviewRepositionCommand
 
 	rightClickStart     redsmath.Vec2
 	rightClickCandidate bool
@@ -204,10 +208,18 @@ func (p *ASDEXPane) Draw(ctx *panes.Context, zcb *renderer.ZCmdBuffer) {
 	p.consumeOpsHotkeys(ctx, transforms)
 	p.coastList.SetVisible(p.showCoastList)
 	p.coastList.SetEntries(p.buildCoastSuspendEntries(now))
-	p.updateCoastListHover(ctx)
+	if p.previewReposition == nil {
+		p.updateCoastListHover(ctx)
+	} else {
+		p.hoveredCoastListTarget = ""
+	}
 	p.updateRightClickGesture(ctx)
 
-	if p.datablockEdit != nil {
+	if p.previewReposition != nil {
+		p.clearHighlightedTarget()
+		p.clampPreviewRepositionCursor(ctx)
+		p.consumePreviewRepositionClick(ctx)
+	} else if p.datablockEdit != nil {
 		p.clearHighlightedTarget()
 		p.consumeDatablockEditWheel(ctx)
 	} else {
@@ -328,6 +340,8 @@ func (p *ASDEXPane) Draw(ctx *panes.Context, zcb *renderer.ZCmdBuffer) {
 		renderer.ReturnTextDrawBuilder(td)
 	}
 	listCB.DisableScissor()
+
+	p.renderPreviewRepositionOutline(ctx, zcb, transforms)
 
 	if cursorLine, cursorColumn, ok := p.activeCommandCursor(); ok {
 		cursorCB := zcb.At(windowZ(0, zPreviewCursor))
@@ -459,6 +473,9 @@ func (p *ASDEXPane) resolveCursorMode(ctx *panes.Context) CursorMode {
 	if p != nil && p.datablockEdit != nil {
 		return CursorModeHidden
 	}
+	if p != nil && p.previewReposition != nil {
+		return CursorModeMove
+	}
 	if ctx != nil && ctx.Mouse != nil && ctx.Mouse.IsDown(platform.MouseButtonRight) {
 		return CursorModeHidden
 	}
@@ -555,6 +572,12 @@ func (p *ASDEXPane) activeCommandLines() []string {
 	if p.termControlEntry != nil {
 		return p.termControlEntry.DisplayLines()
 	}
+	if p.multiFunction != nil {
+		return p.multiFunction.DisplayLines()
+	}
+	if p.previewReposition != nil {
+		return p.previewReposition.DisplayLines()
+	}
 	if p.commandMode == CommandModeTrackSuspend {
 		return []string{"TRK SUSP"}
 	}
@@ -577,6 +600,9 @@ func (p *ASDEXPane) activeCommandCursor() (line int, column int, ok bool) {
 	if p.termControlEntry != nil {
 		return p.termControlEntry.CursorLine(), p.termControlEntry.CursorColumn(), true
 	}
+	if p.multiFunction != nil {
+		return p.multiFunction.CursorLine(), p.multiFunction.CursorColumn(), true
+	}
 	if !p.commandEntry.Empty() {
 		return p.commandEntry.CursorLine(), p.commandEntry.CursorColumn(), true
 	}
@@ -596,6 +622,8 @@ func (p *ASDEXPane) cancelActiveCommand() {
 	p.editingTargetID = ""
 	p.initControlEntry = nil
 	p.termControlEntry = nil
+	p.multiFunction = nil
+	p.previewReposition = nil
 	p.commandEntry.Clear()
 	p.previewArea.SetSystemResponse("")
 }
@@ -612,6 +640,9 @@ func (p *ASDEXPane) consumeCommandKeyboard(ctx *panes.Context) bool {
 	}
 	if p.termControlEntry != nil {
 		return p.handleTerminateControlKeyboard(ctx)
+	}
+	if p.multiFunction != nil {
+		return p.handleMultiFunctionKeyboard(ctx)
 	}
 	if p.commandMode != CommandModeNone {
 		keyboard := ctx.Keyboard
@@ -746,6 +777,57 @@ func (p *ASDEXPane) handleTerminateControlKeyboard(ctx *panes.Context) bool {
 	return handled
 }
 
+func (p *ASDEXPane) handleMultiFunctionKeyboard(ctx *panes.Context) bool {
+	if p == nil || p.multiFunction == nil || ctx == nil || ctx.Keyboard == nil {
+		return false
+	}
+
+	keyboard := ctx.Keyboard
+	switch {
+	case keyboard.WasPressed(platform.KeyEscape):
+		p.cancelActiveCommand()
+		return true
+	case keyboard.WasPressed(platform.KeyBackspace), keyboard.WasPressed(platform.KeyDelete):
+		if p.multiFunction.Value() == "" {
+			p.cancelActiveCommand()
+			return true
+		}
+		p.multiFunction.Clear()
+		return true
+	case keyboard.WasPressed(platform.KeyEnter), keyboard.WasPressed(platform.KeyKeypadEnter):
+		p.multiFunction = nil
+		p.applyCommandStatus(commandOutputClearAll("INVALID ENTRY"))
+		return true
+	}
+
+	for _, r := range keyboard.Text {
+		r = unicode.ToUpper(r)
+		if p.multiFunction.Value() == "" && r == 'P' {
+			p.startMultiPreviewReposition()
+			return true
+		}
+
+		p.multiFunction.Insert(r)
+		p.previewArea.SetSystemResponse("")
+		return true
+	}
+
+	return false
+}
+
+func (p *ASDEXPane) startMultiPreviewReposition() {
+	if p == nil {
+		return
+	}
+
+	p.commandMode = CommandModePreviewReposition
+	p.multiFunction = nil
+	p.previewReposition = NewMultiPreviewRepositionCommand()
+	p.commandEntry.Clear()
+	p.previewArea.SetSystemResponse("")
+	p.clearHighlightedTarget()
+}
+
 func (p *ASDEXPane) handleNormalCommandKeyboard(ctx *panes.Context) bool {
 	if p == nil || ctx == nil || ctx.Keyboard == nil {
 		return false
@@ -829,6 +911,106 @@ func (p *ASDEXPane) consumeDatablockEditWheel(ctx *panes.Context) bool {
 		return true
 	}
 	return false
+}
+
+func (p *ASDEXPane) clampPreviewRepositionCursor(ctx *panes.Context) {
+	if p == nil || p.previewReposition == nil || ctx == nil || ctx.Mouse == nil || ctx.Platform == nil {
+		return
+	}
+
+	local := ctx.Mouse.Pos
+	clamped := clampListRepositionPoint(
+		local,
+		ctx.PaneSize(),
+		p.previewArea.RepositionSize(),
+	)
+	if clamped == local {
+		return
+	}
+
+	ctx.Platform.SetMousePosition(ctx.PaneRect.Min.Add(clamped))
+	ctx.Mouse.Pos = clamped
+	ctx.Mouse.Delta = redsmath.Vec2{}
+}
+
+func (p *ASDEXPane) consumePreviewRepositionClick(ctx *panes.Context) bool {
+	if p == nil || p.previewReposition == nil || ctx == nil || ctx.Mouse == nil {
+		return false
+	}
+	if !ctx.Mouse.WasReleased(platform.MouseButtonLeft) {
+		return false
+	}
+
+	point := clampListRepositionPoint(
+		ctx.Mouse.Pos,
+		ctx.PaneSize(),
+		p.previewArea.RepositionSize(),
+	)
+
+	status, err, handled := p.tryExecuteUserCommand(
+		ctx,
+		"",
+		nil,
+		CommandClickLeft,
+		point,
+		radar.ScopeTransformations{},
+	)
+	if err != nil {
+		p.previewArea.SetSystemResponse(err.Error())
+		return true
+	}
+	if handled {
+		p.applyCommandStatus(status)
+		return true
+	}
+
+	return false
+}
+
+func (p *ASDEXPane) renderPreviewRepositionOutline(
+	ctx *panes.Context,
+	zcb *renderer.ZCmdBuffer,
+	transforms radar.ScopeTransformations,
+) {
+	if p == nil || p.previewReposition == nil || ctx == nil || ctx.Mouse == nil || zcb == nil {
+		return
+	}
+
+	size := p.previewArea.RepositionSize()
+	if size.X <= 0 || size.Y <= 0 {
+		return
+	}
+
+	pos := clampListRepositionPoint(
+		ctx.Mouse.Pos,
+		ctx.PaneSize(),
+		size,
+	)
+
+	x, y, w, h := ctx.PaneFramebufferRect()
+	cb := zcb.At(windowZ(0, zPreviewRepositionOutline))
+	cb.Viewport(x, y, w, h)
+	cb.Scissor(x, y, w, h)
+	transforms.LoadWindowViewingMatrices(cb)
+
+	cb.SetRGB(previewRepositionOutlineColor(brightnessDefault))
+	cb.LineWidth(1)
+
+	builder := renderer.GetLinesBuilder()
+	builder.AddLineLoop([]renderer.PointVertex{
+		{X: pos.X, Y: pos.Y},
+		{X: pos.X + size.X, Y: pos.Y},
+		{X: pos.X + size.X, Y: pos.Y + size.Y},
+		{X: pos.X, Y: pos.Y + size.Y},
+	})
+	builder.GenerateCommands(cb)
+	renderer.ReturnLinesBuilder(builder)
+
+	cb.DisableScissor()
+}
+
+func previewRepositionOutlineColor(brightness int) renderer.RGB {
+	return applyBrightness(renderer.RGB8(0, 255, 255), brightness, brightnessFloorDefault)
 }
 
 func (p *ASDEXPane) updateRightClickGesture(ctx *panes.Context) {

@@ -13,8 +13,6 @@ import (
 	"github.com/juliusplatzer/reds/util"
 )
 
-const feetPerNM = 6076.12
-
 type PolygonType int
 
 const (
@@ -68,7 +66,7 @@ func LoadVideoMap(icao string) (*VideoMap, error) {
 		Y: (lonLatBounds.Min.Y + lonLatBounds.Max.Y) * 0.5,
 	}
 
-	toFeet := lonLatToFeet(vm.anchor)
+	toFeet := redsmath.LonLatToFeet(vm.anchor)
 	firstFeet := true
 	for i := range polygons {
 		for r := range polygons[i].Rings {
@@ -116,7 +114,7 @@ func (vm *VideoMap) LonLatToFeet(lon, lat float64) redsmath.Vec2 {
 	if vm == nil {
 		return redsmath.Vec2{}
 	}
-	return lonLatToFeet(vm.anchor)(redsmath.Vec2{
+	return redsmath.LonLatToFeet(vm.anchor)(redsmath.Vec2{
 		X: float32(lon),
 		Y: float32(lat),
 	})
@@ -364,14 +362,4 @@ func videoMapColor(polygonType PolygonType, mode Mode) renderer.RGB {
 		}
 	}
 	return applyBrightness(base, brightnessDefault, brightnessFloorDefault)
-}
-
-func lonLatToFeet(anchor redsmath.Vec2) func(redsmath.Vec2) redsmath.Vec2 {
-	cosLat := float32(stdmath.Cos(float64(anchor.Y) * stdmath.Pi / 180.0))
-	return func(p redsmath.Vec2) redsmath.Vec2 {
-		return redsmath.Vec2{
-			X: (p.X - anchor.X) * 60.0 * cosLat * feetPerNM,
-			Y: (p.Y - anchor.Y) * 60.0 * feetPerNM,
-		}
-	}
 }
