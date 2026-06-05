@@ -79,14 +79,15 @@ type ASDEXPane struct {
 	cursors    CursorSet
 	cursorMode CursorMode
 
-	datablockSettings       DataBlockSettings
-	datablockTimeshareStart time.Time
-	leaderDirectionByTarget map[string]LeaderDirection
-	leaderLengthByTarget    map[string]int
-	previewArea             PreviewArea
-	coastList               CoastList
-	showCoastList           bool
-	hoveredCoastListTarget  string
+	datablockSettings         DataBlockSettings
+	datablockTimeshareStart   time.Time
+	leaderDirectionByTarget   map[string]LeaderDirection
+	leaderLengthByTarget      map[string]int
+	showBeaconUntilByTargetID map[string]time.Time
+	previewArea               PreviewArea
+	coastList                 CoastList
+	showCoastList             bool
+	hoveredCoastListTarget    string
 
 	commandMode         CommandMode
 	commandEntry        CommandTextEntry
@@ -156,13 +157,14 @@ func NewPane(airport string) (*ASDEXPane, error) {
 		fonts:             fonts,
 		eramTextFonts:     eramTextFonts,
 
-		datablockSettings:       DefaultDataBlockSettings(),
-		datablockTimeshareStart: time.Now(),
-		leaderDirectionByTarget: make(map[string]LeaderDirection),
-		leaderLengthByTarget:    make(map[string]int),
-		previewArea:             preview,
-		coastList:               coastList,
-		showCoastList:           true,
+		datablockSettings:         DefaultDataBlockSettings(),
+		datablockTimeshareStart:   time.Now(),
+		leaderDirectionByTarget:   make(map[string]LeaderDirection),
+		leaderLengthByTarget:      make(map[string]int),
+		showBeaconUntilByTargetID: make(map[string]time.Time),
+		previewArea:               preview,
+		coastList:                 coastList,
+		showCoastList:             true,
 	}, nil
 }
 
@@ -175,6 +177,48 @@ func (p *ASDEXPane) Dispose() {
 		p.smes = nil
 	}
 	p.targets.Clear()
+	clear(p.showBeaconUntilByTargetID)
+}
+
+const beaconatorDuration = 4 * time.Second
+
+func (p *ASDEXPane) toggleTemporaryBeaconCodeForTarget(target *Target) {
+	if p == nil || target == nil || target.ID == "" {
+		return
+	}
+
+	if p.showBeaconUntilByTargetID == nil {
+		p.showBeaconUntilByTargetID = make(map[string]time.Time)
+	}
+
+	now := time.Now().UTC()
+	if until, ok := p.showBeaconUntilByTargetID[target.ID]; ok && until.After(now) {
+		delete(p.showBeaconUntilByTargetID, target.ID)
+		return
+	}
+
+	p.showBeaconUntilByTargetID[target.ID] = now.Add(beaconatorDuration)
+}
+
+func (p *ASDEXPane) expireTemporaryBeaconDisplays(now time.Time) {
+	if p == nil || len(p.showBeaconUntilByTargetID) == 0 {
+		return
+	}
+
+	for id, until := range p.showBeaconUntilByTargetID {
+		if !until.After(now) || p.targets.TargetByID(id) == nil {
+			delete(p.showBeaconUntilByTargetID, id)
+		}
+	}
+}
+
+func (p *ASDEXPane) showBeaconCodeForTarget(target *Target, now time.Time) bool {
+	if p == nil || target == nil || target.ID == "" {
+		return false
+	}
+
+	until, ok := p.showBeaconUntilByTargetID[target.ID]
+	return ok && until.After(now)
 }
 
 func (p *ASDEXPane) Draw(ctx *panes.Context, zcb *renderer.ZCmdBuffer) {
@@ -199,6 +243,7 @@ func (p *ASDEXPane) Draw(ctx *panes.Context, zcb *renderer.ZCmdBuffer) {
 	)
 
 	now := time.Now().UTC()
+	p.expireTemporaryBeaconDisplays(now)
 	p.targets.ExpireSuspendedTracks(now)
 	p.targets.UpdateCoastDropTracks(
 		now,
@@ -304,6 +349,9 @@ func (p *ASDEXPane) Draw(ctx *panes.Context, zcb *renderer.ZCmdBuffer) {
 					}
 				}
 				return settings
+			},
+			ShowBeaconCodeForTarget: func(target *Target) bool {
+				return p.showBeaconCodeForTarget(target, now)
 			},
 		},
 	)
@@ -800,6 +848,9 @@ func (p *ASDEXPane) handleMultiFunctionKeyboard(ctx *panes.Context) bool {
 		p.multiFunction.Clear()
 		return true
 	case keyboard.WasPressed(platform.KeyEnter), keyboard.WasPressed(platform.KeyKeypadEnter):
+		if p.multiFunction.Value() == "B" {
+			return true
+		}
 		p.multiFunction = nil
 		p.applyCommandStatus(commandOutputClearAll("INVALID ENTRY"))
 		return true
