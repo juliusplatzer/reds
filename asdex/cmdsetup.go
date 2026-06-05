@@ -5,6 +5,14 @@ import "github.com/juliusplatzer/reds/panes"
 func registerSetupCommands() {
 	registerCommand(
 		CommandModeNone,
+		"[MAP THEME]",
+		func(ap *ASDEXPane, ctx *panes.Context) CommandStatus {
+			return ap.cmdMapTheme(ctx)
+		},
+	)
+
+	registerCommand(
+		CommandModeNone,
 		"[LDR DIR][SLEW]",
 		func(ap *ASDEXPane, ctx *panes.Context, input LeaderDirectionInput, target *Target) CommandStatus {
 			return ap.cmdLeaderDirectionSlew(ctx, input, target)
@@ -18,6 +26,25 @@ func registerSetupCommands() {
 			return ap.cmdLeaderDirectionAll(ctx, input)
 		},
 	)
+}
+
+func (ap *ASDEXPane) cmdMapTheme(_ *panes.Context) CommandStatus {
+	if ap == nil {
+		return CommandStatus{Clear: ClearAll}
+	}
+
+	switch ap.mode {
+	case ModeDay:
+		ap.mode = ModeNight
+	default:
+		ap.mode = ModeDay
+	}
+
+	return CommandStatus{
+		Clear:     ClearAll,
+		Output:    "",
+		HasOutput: true,
+	}
 }
 
 func (ap *ASDEXPane) cmdLeaderDirectionAll(

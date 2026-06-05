@@ -853,6 +853,8 @@ func (ap *ASDEXPane) consumeOpsHotkeys(
 		command = "[TRK SUSP]"
 	case ctx.Keyboard.WasPressed(platform.KeyF5):
 		command = "[TERM CNTL]"
+	case ctx.Keyboard.WasPressed(platform.KeyF10):
+		command = "[MAP THEME]"
 	default:
 		return false
 	}
