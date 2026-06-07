@@ -513,15 +513,49 @@ func (p *ASDEXPane) renderDcb(
 }
 
 func (p *ASDEXPane) hoveredDcbButtonIndex(ctx *panes.Context) int {
-	if p == nil || ctx == nil || ctx.Mouse == nil {
-		return -1
-	}
-
-	hit := p.dcb.HitTest(ctx.Mouse.Pos, ctx.PaneSize(), p.fonts.font, p.dcbState())
+	hit := p.dcbHit(ctx)
 	if !hit.OverDcb {
 		return -1
 	}
 	return hit.ButtonIndex
+}
+
+func (p *ASDEXPane) mouseOverDcb(ctx *panes.Context) bool {
+	return p.dcbHit(ctx).OverDcb
+}
+
+func (p *ASDEXPane) dcbHit(ctx *panes.Context) DcbHit {
+	if p == nil || ctx == nil || ctx.Mouse == nil {
+		return DcbHit{ButtonIndex: -1}
+	}
+
+	return p.dcb.HitTest(ctx.Mouse.Pos, ctx.PaneSize(), p.fonts.font, p.dcbState())
+}
+
+func (p *ASDEXPane) dcbCursorUnlocked() bool {
+	if p == nil {
+		return false
+	}
+	if p.dcbSpinner != nil {
+		return true
+	}
+
+	return p.commandMode == CommandModeNone &&
+		p.datablockEdit == nil &&
+		p.initControlEntry == nil &&
+		p.termControlEntry == nil &&
+		p.multiFunction == nil &&
+		p.previewReposition == nil &&
+		p.coastListReposition == nil &&
+		p.mapReposition == nil &&
+		p.mapRotate == nil
+}
+
+func (p *ASDEXPane) dcbMouseCaptured() bool {
+	if p == nil {
+		return false
+	}
+	return false
 }
 
 func (p *ASDEXPane) dcbState() DcbState {
@@ -560,7 +594,7 @@ func (p *ASDEXPane) consumeDcbInput(ctx *panes.Context) bool {
 		return false
 	}
 
-	hit := p.dcb.HitTest(ctx.Mouse.Pos, ctx.PaneSize(), p.fonts.font, p.dcbState())
+	hit := p.dcbHit(ctx)
 	if !hit.OverDcb {
 		return false
 	}
@@ -824,6 +858,12 @@ func (p *ASDEXPane) resolveCursorMode(ctx *panes.Context) CursorMode {
 	}
 	if ctx != nil && ctx.Mouse != nil && ctx.Mouse.IsDown(platform.MouseButtonRight) {
 		return CursorModeHidden
+	}
+	if p != nil && p.dcbCursorUnlocked() && p.mouseOverDcb(ctx) {
+		if p.dcbMouseCaptured() {
+			return CursorModeCaptured
+		}
+		return CursorModeDcb
 	}
 	if p != nil && p.showCoastList && ctx != nil && ctx.Mouse != nil {
 		hit := p.coastList.HitTest(ctx.Mouse.Pos, p.fonts.font, p.eramTextFonts.font, ctx.PaneSize())
