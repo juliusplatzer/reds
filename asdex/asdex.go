@@ -36,6 +36,10 @@ const (
 
 	aircraftCoastDelay = 60 * time.Second
 	coastDropLifetime  = 45 * time.Second
+
+	asdexMinRangeNM     = 6
+	asdexMaxRangeNM     = 300
+	asdexDefaultRangeNM = 6
 )
 
 const (
@@ -114,6 +118,7 @@ type ASDEXPane struct {
 	highlightQueryValid    bool
 
 	center          redsmath.Vec2
+	rangeNM         int
 	rangeFeet       float32
 	rotation        float32
 	viewInitialized bool
@@ -171,6 +176,8 @@ func NewPane(airport string) (*ASDEXPane, error) {
 		coastList:                 coastList,
 		dcb:                       NewDcb(),
 		showCoastList:             true,
+		rangeNM:                   asdexDefaultRangeNM,
+		rangeFeet:                 rangeFeetFromNM(asdexDefaultRangeNM),
 	}, nil
 }
 
@@ -492,12 +499,24 @@ func (p *ASDEXPane) renderDcb(
 		transforms.LoadWindowViewingMatrices(textCB)
 
 		td := renderer.GetTextDrawBuilder()
-		p.dcb.DrawText(td, p.fonts.font, layout, -1)
+		p.dcb.DrawText(td, p.fonts.font, layout, p.hoveredDcbButtonIndex(ctx))
 		td.GenerateCommands(textCB, textureID)
 		renderer.ReturnTextDrawBuilder(td)
 
 		textCB.DisableScissor()
 	}
+}
+
+func (p *ASDEXPane) hoveredDcbButtonIndex(ctx *panes.Context) int {
+	if p == nil || ctx == nil || ctx.Mouse == nil {
+		return -1
+	}
+
+	hit := p.dcb.HitTest(ctx.Mouse.Pos, ctx.PaneSize(), p.fonts.font, p.dcbState())
+	if !hit.OverDcb {
+		return -1
+	}
+	return hit.ButtonIndex
 }
 
 func (p *ASDEXPane) dcbState() DcbState {
@@ -509,24 +528,19 @@ func (p *ASDEXPane) dcbState() DcbState {
 		}
 	}
 
-	rangeNM := int(stdmath.Round(float64(p.rangeFeet / redsmath.FeetPerNM)))
-	if rangeNM < 0 {
-		rangeNM = 0
+	rangeNM := asdexDefaultRangeNM
+	if p.rangeNM != 0 {
+		rangeNM = clampInt(p.rangeNM, asdexMinRangeNM, asdexMaxRangeNM)
 	}
 
 	activeSpinnerFunction := DcbFunctionVacant
-	rangeDisplay := ""
 	if p.dcbSpinner != nil {
 		activeSpinnerFunction = p.dcbSpinner.Function
-		if p.dcbSpinner.Function == DcbFunctionRange {
-			rangeDisplay = p.dcbSpinner.InputText()
-		}
 	}
 
 	settings := p.dataBlockSettings()
 	return DcbState{
 		RangeNM:               rangeNM,
-		RangeDisplay:          rangeDisplay,
 		Mode:                  p.mode,
 		VectorOn:              true,
 		VectorLength:          3,
@@ -577,7 +591,9 @@ func (p *ASDEXPane) startRangeSpinner() {
 		return
 	}
 
-	currentRange := int(stdmath.Round(float64(p.rangeFeet / redsmath.FeetPerNM)))
+	if p.rangeNM == 0 {
+		p.setRangeNM(asdexDefaultRangeNM)
+	}
 
 	p.commandMode = CommandModeNone
 	p.datablockEdit = nil
@@ -590,7 +606,7 @@ func (p *ASDEXPane) startRangeSpinner() {
 	p.mapReposition = nil
 	p.mapRotate = nil
 	p.commandEntry.Clear()
-	p.dcbSpinner = NewRangeDcbSpinner(currentRange)
+	p.dcbSpinner = NewRangeDcbSpinner(p.rangeNM)
 	p.previewArea.SetSystemResponse("")
 	p.clearHighlightedTarget()
 }
@@ -603,20 +619,16 @@ func (p *ASDEXPane) consumeDcbSpinnerInput(ctx *panes.Context) bool {
 	mouse := ctx.Mouse
 	switch {
 	case mouse.Wheel.Y > 0:
-		p.dcbSpinner.Increment(1)
-		p.previewArea.SetSystemResponse("")
+		p.incrementActiveDcbSpinner(1)
 		return true
 	case mouse.Wheel.Y < 0:
-		p.dcbSpinner.Increment(-1)
-		p.previewArea.SetSystemResponse("")
+		p.incrementActiveDcbSpinner(-1)
 		return true
 	case mouse.Wheel.X > 0:
-		p.dcbSpinner.Increment(1)
-		p.previewArea.SetSystemResponse("")
+		p.incrementActiveDcbSpinner(1)
 		return true
 	case mouse.Wheel.X < 0:
-		p.dcbSpinner.Increment(-1)
-		p.previewArea.SetSystemResponse("")
+		p.incrementActiveDcbSpinner(-1)
 		return true
 	case mouse.WasReleased(platform.MouseButtonLeft):
 		p.commitDcbSpinner()
@@ -640,23 +652,44 @@ func (p *ASDEXPane) commitDcbSpinner() {
 	}
 
 	spinner := p.dcbSpinner
-	value, ok := spinner.ParsedValue()
-	if !ok {
-		p.dcbSpinner = nil
-		p.previewArea.SetSystemResponse("INVALID ENTRY")
-		return
-	}
-
 	switch spinner.Kind {
 	case DcbSpinnerRange:
+		if strings.TrimSpace(spinner.InputText()) == "" {
+			p.dcbSpinner = nil
+			p.previewArea.SetSystemResponse("")
+			return
+		}
+
+		value, ok := spinner.ParsedValue()
+		if !ok {
+			p.dcbSpinner = nil
+			p.previewArea.SetSystemResponse("INVALID RANGE")
+			return
+		}
+
 		p.setRangeNM(value)
+		p.dcbSpinner = nil
+		p.previewArea.SetSystemResponse("")
+		return
 	default:
 		p.dcbSpinner = nil
 		p.previewArea.SetSystemResponse("INVALID ENTRY")
 		return
 	}
+}
 
-	p.dcbSpinner = nil
+func (p *ASDEXPane) incrementActiveDcbSpinner(delta int) {
+	if p == nil || p.dcbSpinner == nil || delta == 0 {
+		return
+	}
+
+	switch p.dcbSpinner.Kind {
+	case DcbSpinnerRange:
+		p.setRangeNM(p.rangeNM + delta)
+		p.dcbSpinner.Value = p.rangeNM
+	default:
+		p.dcbSpinner.Increment(delta)
+	}
 	p.previewArea.SetSystemResponse("")
 }
 
@@ -664,8 +697,8 @@ func (p *ASDEXPane) setRangeNM(rangeNM int) {
 	if p == nil {
 		return
 	}
-	rangeNM = clampInt(rangeNM, 6, 300)
-	p.rangeFeet = float32(rangeNM) * redsmath.FeetPerNM
+	p.rangeNM = clampInt(rangeNM, asdexMinRangeNM, asdexMaxRangeNM)
+	p.rangeFeet = rangeFeetFromNM(p.rangeNM)
 }
 
 func (p *ASDEXPane) dataBlockSettings() DataBlockSettings {
@@ -1264,6 +1297,9 @@ func (p *ASDEXPane) handleDcbSpinnerKeyboard(ctx *panes.Context) bool {
 	case keyboard.WasPressed(platform.KeyEscape):
 		p.cancelDcbSpinner()
 		return true
+	case keyboard.WasPressed(platform.KeyBackspace), keyboard.WasPressed(platform.KeyDelete):
+		p.cancelDcbSpinner()
+		return true
 	case keyboard.WasPressed(platform.KeyEnter), keyboard.WasPressed(platform.KeyKeypadEnter):
 		p.commitDcbSpinner()
 		return true
@@ -1272,12 +1308,6 @@ func (p *ASDEXPane) handleDcbSpinnerKeyboard(ctx *panes.Context) bool {
 		return true
 	case keyboard.WasPressed(platform.KeyRight):
 		spinner.MoveRight()
-		return true
-	case keyboard.WasPressed(platform.KeyBackspace):
-		spinner.Backspace()
-		return true
-	case keyboard.WasPressed(platform.KeyDelete):
-		spinner.DeleteForward()
 		return true
 	}
 
@@ -1805,16 +1835,24 @@ func (p *ASDEXPane) initView(rect redsmath.Rect) {
 	rangeFromHeight := height * margin * 0.5
 	rangeFromWidth := (width * margin) / (2 * aspect)
 
-	rangeFeet := rangeFromHeight
-	if rangeFromWidth > rangeFeet {
-		rangeFeet = rangeFromWidth
+	fitRangeFeet := rangeFromHeight
+	if rangeFromWidth > fitRangeFeet {
+		fitRangeFeet = rangeFromWidth
 	}
 
 	p.center = redsmath.Vec2{
 		X: (bounds.Min.X + bounds.Max.X) * 0.5,
 		Y: (bounds.Min.Y + bounds.Max.Y) * 0.5,
 	}
-	p.rangeFeet = rangeFeet
+	fitRangeNM := int(stdmath.Ceil(float64(fitRangeFeet / redsmath.FeetPerNM)))
+	fitRangeNM = clampInt(fitRangeNM, asdexMinRangeNM, asdexMaxRangeNM)
+	if p.rangeNM == 0 {
+		p.rangeNM = asdexDefaultRangeNM
+	}
+	if fitRangeNM > p.rangeNM {
+		p.rangeNM = fitRangeNM
+	}
+	p.rangeFeet = rangeFeetFromNM(p.rangeNM)
 	p.rotation = 0
 	p.viewInitialized = true
 }
@@ -1852,15 +1890,16 @@ func (p *ASDEXPane) consumeMouseEvents(
 	}
 
 	if mouse.Wheel.Y != 0 && paneLocal.Contains(mouse.Pos) {
-		oldRange := p.rangeFeet
-		p.rangeFeet = p.zoomedRange(mouse.Wheel.Y)
-		newRange := p.rangeFeet
+		oldRangeFeet := p.rangeFeet
+		oldCenter := p.center
+		p.setRangeNM(p.rangeNM + wheelRangeDelta(mouse.Wheel.Y))
+		newRangeFeet := p.rangeFeet
 
-		if oldRange > 0 && newRange > 0 && newRange != oldRange {
+		if oldRangeFeet > 0 && newRangeFeet > 0 && newRangeFeet != oldRangeFeet {
 			if ctx.Keyboard != nil && ctx.Keyboard.IsDown(platform.KeyAlt) {
 				mouseWorld := transforms.WorldFromWindowP(mouse.Pos)
-				scale := newRange / oldRange
-				p.center = mouseWorld.Add(p.center.Sub(mouseWorld).Mul(scale))
+				scale := newRangeFeet / oldRangeFeet
+				p.center = mouseWorld.Add(oldCenter.Sub(mouseWorld).Mul(scale))
 			}
 			changed = true
 		}
@@ -1899,6 +1938,22 @@ func (p *ASDEXPane) rotateByDegrees(delta float32) {
 	p.rotation = normalizeRotation(p.rotation + delta)
 }
 
+func wheelRangeDelta(wheelY float32) int {
+	switch {
+	case wheelY > 0:
+		return -1
+	case wheelY < 0:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func rangeFeetFromNM(rangeNM int) float32 {
+	rangeNM = clampInt(rangeNM, asdexMinRangeNM, asdexMaxRangeNM)
+	return float32(rangeNM) * redsmath.FeetPerNM
+}
+
 func normalizeRotation(value float32) float32 {
 	for value >= 360 {
 		value -= 360
@@ -1907,46 +1962,6 @@ func normalizeRotation(value float32) float32 {
 		value += 360
 	}
 	return value
-}
-
-func (p *ASDEXPane) zoomedRange(wheel float32) float32 {
-	if p == nil {
-		return 1
-	}
-
-	factor := float32(stdmath.Pow(1.12, float64(wheel)))
-	if factor <= 0 {
-		return p.rangeFeet
-	}
-
-	next := p.rangeFeet / factor
-	return clamp(next, p.minRangeFeet(), p.maxRangeFeet())
-}
-
-func (p *ASDEXPane) minRangeFeet() float32 {
-	return 500
-}
-
-func (p *ASDEXPane) maxRangeFeet() float32 {
-	if p == nil || p.videomap == nil {
-		return 100000
-	}
-
-	bounds := p.videomap.BoundsFeet()
-	if bounds.Empty() {
-		return 100000
-	}
-
-	maxDim := bounds.Width()
-	if bounds.Height() > maxDim {
-		maxDim = bounds.Height()
-	}
-
-	maxRange := maxDim * 10
-	if maxRange < 2000 {
-		maxRange = 2000
-	}
-	return maxRange
 }
 
 func clamp(v, lo, hi float32) float32 {
