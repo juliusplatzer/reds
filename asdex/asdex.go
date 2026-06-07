@@ -451,14 +451,20 @@ func (p *ASDEXPane) renderDcb(
 	}
 
 	x, y, w, h := ctx.PaneFramebufferRect()
-	cb := zcb.At(windowZ(0, zDCBBackground))
-	cb.Viewport(x, y, w, h)
-	cb.Scissor(x, y, w, h)
-	transforms.LoadWindowViewingMatrices(cb)
 
-	p.dcb.DrawBackground(cb, layout)
+	bgCB := zcb.At(windowZ(0, zDCBBackground))
+	bgCB.Viewport(x, y, w, h)
+	bgCB.Scissor(x, y, w, h)
+	transforms.LoadWindowViewingMatrices(bgCB)
+	p.dcb.DrawBackground(bgCB, layout)
+	bgCB.DisableScissor()
 
-	cb.DisableScissor()
+	buttonCB := zcb.At(windowZ(0, zDCBButtons))
+	buttonCB.Viewport(x, y, w, h)
+	buttonCB.Scissor(x, y, w, h)
+	transforms.LoadWindowViewingMatrices(buttonCB)
+	p.dcb.DrawButtons(buttonCB, layout)
+	buttonCB.DisableScissor()
 }
 
 func (p *ASDEXPane) dataBlockSettings() DataBlockSettings {
