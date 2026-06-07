@@ -445,7 +445,7 @@ func (p *ASDEXPane) renderDcb(
 		return
 	}
 
-	layout := p.dcb.Layout(ctx.PaneSize(), p.fonts.font)
+	layout := p.dcb.Layout(ctx.PaneSize(), p.fonts.font, p.dcbState())
 	if layout.Bounds.Empty() {
 		return
 	}
@@ -465,6 +465,46 @@ func (p *ASDEXPane) renderDcb(
 	transforms.LoadWindowViewingMatrices(buttonCB)
 	p.dcb.DrawButtons(buttonCB, layout)
 	buttonCB.DisableScissor()
+
+	textureID := p.fonts.textureForSize(ctx.Renderer, layout.RenderFontSize)
+	if textureID != 0 {
+		textCB := zcb.At(windowZ(0, zDCBText))
+		textCB.Viewport(x, y, w, h)
+		textCB.Scissor(x, y, w, h)
+		transforms.LoadWindowViewingMatrices(textCB)
+
+		td := renderer.GetTextDrawBuilder()
+		p.dcb.DrawText(td, p.fonts.font, layout, -1)
+		td.GenerateCommands(textCB, textureID)
+		renderer.ReturnTextDrawBuilder(td)
+
+		textCB.DisableScissor()
+	}
+}
+
+func (p *ASDEXPane) dcbState() DcbState {
+	if p == nil {
+		return DcbState{
+			Mode:         ModeDay,
+			VectorOn:     true,
+			VectorLength: 3,
+		}
+	}
+
+	rangeNM := int(stdmath.Round(float64(p.rangeFeet / redsmath.FeetPerNM)))
+	if rangeNM < 0 {
+		rangeNM = 0
+	}
+
+	settings := p.dataBlockSettings()
+	return DcbState{
+		RangeNM:      rangeNM,
+		Mode:         p.mode,
+		VectorOn:     true,
+		VectorLength: 3,
+		LeaderLength: settings.LeaderLength,
+		DataBlocksOn: settings.ShowDataBlocks,
+	}
 }
 
 func (p *ASDEXPane) dataBlockSettings() DataBlockSettings {

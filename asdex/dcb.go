@@ -1,6 +1,9 @@
 package asdex
 
 import (
+	"strconv"
+	"strings"
+
 	redsmath "github.com/juliusplatzer/reds/math"
 	"github.com/juliusplatzer/reds/renderer"
 )
@@ -67,9 +70,10 @@ const (
 )
 
 const (
-	dcbButtonSpacing = 3
-	dcbColumnCount   = 14
-	dcbMinBrightness = 20
+	dcbButtonSpacing   = 3
+	dcbColumnCount     = 14
+	dcbMinBrightness   = 20
+	dcbTextLineSpacing = 4
 )
 
 var (
@@ -79,6 +83,9 @@ var (
 	dcbMenuButtonRGB  = renderer.RGB8(80, 80, 80)
 	dcbDepressedRGB   = renderer.RGB8(45, 45, 45)
 	dcbErrorButtonRGB = renderer.RGB8(255, 0, 0)
+	dcbTextRGB        = renderer.RGB8(255, 255, 255)
+	dcbTextHoverRGB   = renderer.RGB8(0, 255, 0)
+	dcbHighlightRGB   = renderer.RGB8(255, 220, 40)
 )
 
 type Dcb struct {
@@ -96,6 +103,14 @@ type DcbButtonSpec struct {
 	Visible   bool
 	Depressed bool
 	Active    bool
+
+	Lines     []string
+	ShowValue bool
+	Value     string
+
+	OnLabel  string
+	OffLabel string
+	On       bool
 }
 
 type DcbButtonLayout struct {
@@ -115,6 +130,15 @@ type DcbLayout struct {
 	RenderFontSize int
 
 	Buttons []DcbButtonLayout
+}
+
+type DcbState struct {
+	RangeNM      int
+	Mode         Mode
+	VectorOn     bool
+	VectorLength int
+	LeaderLength int
+	DataBlocksOn bool
 }
 
 func NewDcb() Dcb {
@@ -221,77 +245,109 @@ func isLargeDcbFunction(function DcbFunction) bool {
 	}
 }
 
-func (d *Dcb) mainButtonSpecs() []DcbButtonSpec {
-	normal := func(function DcbFunction) DcbButtonSpec {
+func (d *Dcb) mainButtonSpecs(state DcbState) []DcbButtonSpec {
+	normal := func(function DcbFunction, lines ...string) DcbButtonSpec {
 		return DcbButtonSpec{
 			Function: function,
 			Kind:     DcbButtonNormal,
 			Large:    isLargeDcbFunction(function),
 			Visible:  true,
+			Lines:    append([]string(nil), lines...),
 		}
 	}
-	menu := func(function DcbFunction) DcbButtonSpec {
+	menu := func(function DcbFunction, lines ...string) DcbButtonSpec {
 		return DcbButtonSpec{
 			Function: function,
 			Kind:     DcbButtonMenu,
 			Large:    isLargeDcbFunction(function),
 			Visible:  true,
+			Lines:    append([]string(nil), lines...),
 		}
 	}
-	value := func(function DcbFunction) DcbButtonSpec {
+	value := func(function DcbFunction, showValue bool, value string, lines ...string) DcbButtonSpec {
 		return DcbButtonSpec{
-			Function: function,
-			Kind:     DcbButtonValue,
-			Large:    isLargeDcbFunction(function),
-			Visible:  true,
+			Function:  function,
+			Kind:      DcbButtonValue,
+			Large:     isLargeDcbFunction(function),
+			Visible:   true,
+			Lines:     append([]string(nil), lines...),
+			ShowValue: showValue,
+			Value:     value,
 		}
 	}
-	toggle := func(function DcbFunction) DcbButtonSpec {
+	toggle := func(function DcbFunction, on bool, onLabel string, offLabel string, lines ...string) DcbButtonSpec {
 		return DcbButtonSpec{
 			Function: function,
 			Kind:     DcbButtonToggle,
 			Large:    isLargeDcbFunction(function),
 			Visible:  true,
+			Lines:    append([]string(nil), lines...),
+			On:       on,
+			OnLabel:  onLabel,
+			OffLabel: offLabel,
+		}
+	}
+	errorButton := func(function DcbFunction, lines ...string) DcbButtonSpec {
+		return DcbButtonSpec{
+			Function: function,
+			Kind:     DcbButtonError,
+			Large:    isLargeDcbFunction(function),
+			Visible:  true,
+			Lines:    append([]string(nil), lines...),
 		}
 	}
 
 	return []DcbButtonSpec{
-		value(DcbFunctionRange),
-		normal(DcbFunctionMapReposition),
-		value(DcbFunctionRotate),
-		normal(DcbFunctionUndo),
-		normal(DcbFunctionDefault),
-		menu(DcbFunctionPrefs),
-		toggle(DcbFunctionDayNite),
-		menu(DcbFunctionBrightness),
-		menu(DcbFunctionCharSize),
-		menu(DcbFunctionSafetyLogic),
-		menu(DcbFunctionTools),
-		toggle(DcbFunctionVectorOnOff),
-		value(DcbFunctionVectorLength),
-		menu(DcbFunctionTempData),
-		value(DcbFunctionLeaderLength),
-		menu(DcbFunctionLocal1),
-		menu(DcbFunctionLocal2),
-		menu(DcbFunctionDataBlockArea),
-		menu(DcbFunctionDataBlockEdit),
-		toggle(DcbFunctionDataBlocksOnOff),
-		normal(DcbFunctionInitControl),
-		normal(DcbFunctionTrackSuspend),
-		normal(DcbFunctionTermControl),
-		toggle(DcbFunctionDcbOnOff),
-		menu(DcbFunctionOperationalMode),
+		value(DcbFunctionRange, true, d.rangeLabel(state), "RANGE"),
+		normal(DcbFunctionMapReposition, "MAP", "RPOS"),
+		value(DcbFunctionRotate, false, "", "ROTATE"),
+		normal(DcbFunctionUndo, "UNDO"),
+		normal(DcbFunctionDefault, "DEFAULT"),
+		menu(DcbFunctionPrefs, "PREF"),
+		toggle(DcbFunctionDayNite, state.Mode == ModeDay, "DAY", "NITE"),
+		menu(DcbFunctionBrightness, "BRITE"),
+		menu(DcbFunctionCharSize, "CHAR", "SIZE"),
+		menu(DcbFunctionSafetyLogic, "SAFETY", "LOGIC", "LIMITED"),
+		menu(DcbFunctionTools, "TOOLS"),
+		toggle(DcbFunctionVectorOnOff, state.VectorOn, "ON", "OFF", "VECTOR"),
+		value(DcbFunctionVectorLength, true, d.vectorLengthLabel(state), "VECTOR"),
+		menu(DcbFunctionTempData, "TEMP", "DATA"),
+		value(DcbFunctionLeaderLength, true, d.leaderLengthLabel(state), "LDR LNG"),
+		menu(DcbFunctionLocal1, "LOCAL", "101-188"),
+		menu(DcbFunctionLocal2, "LOCAL", "189-276"),
+		menu(DcbFunctionDataBlockArea, "DB", "AREA"),
+		menu(DcbFunctionDataBlockEdit, "DB EDIT"),
+		toggle(DcbFunctionDataBlocksOnOff, state.DataBlocksOn, "ON", "OFF", "DB"),
+		normal(DcbFunctionInitControl, "INIT", "CNTL"),
+		normal(DcbFunctionTrackSuspend, "TRK", "SUSP"),
+		normal(DcbFunctionTermControl, "TERM", "CNTL"),
+		toggle(DcbFunctionDcbOnOff, d.Visible(), "ON", "OFF", "DCB"),
+		errorButton(DcbFunctionMlatOff, "MLAT", "OFF"),
+		errorButton(DcbFunctionAsrOff, "ASR", "OFF"),
+		menu(DcbFunctionOperationalMode, "OPER", "MODE"),
 	}
 }
 
-func (d *Dcb) buttonSpecs() []DcbButtonSpec {
+func (d *Dcb) rangeLabel(state DcbState) string {
+	return strconv.Itoa(state.RangeNM)
+}
+
+func (d *Dcb) vectorLengthLabel(state DcbState) string {
+	return strconv.Itoa(state.VectorLength)
+}
+
+func (d *Dcb) leaderLengthLabel(state DcbState) string {
+	return strconv.Itoa(state.LeaderLength)
+}
+
+func (d *Dcb) buttonSpecs(state DcbState) []DcbButtonSpec {
 	if d == nil || d.menu == DcbMenuOff {
 		return nil
 	}
-	return d.mainButtonSpecs()
+	return d.mainButtonSpecs(state)
 }
 
-func (d *Dcb) Layout(displaySize redsmath.Vec2, font *renderer.BitmapFont) DcbLayout {
+func (d *Dcb) Layout(displaySize redsmath.Vec2, font *renderer.BitmapFont, state DcbState) DcbLayout {
 	var out DcbLayout
 	if d == nil || !d.Visible() || font == nil || displaySize.X <= 0 || displaySize.Y <= 0 {
 		return out
@@ -371,7 +427,7 @@ func (d *Dcb) Layout(displaySize redsmath.Vec2, font *renderer.BitmapFont) DcbLa
 		out.MenuBounds = redsmath.NewRect(x, menuY, x+menuSize.X, menuY+menuSize.Y)
 	}
 
-	out.Buttons = d.layoutButtons(out.MenuBounds, out.ButtonSize, d.buttonSpecs())
+	out.Buttons = d.layoutButtons(out.MenuBounds, out.ButtonSize, d.buttonSpecs(state))
 	return out
 }
 
@@ -519,6 +575,287 @@ func (d *Dcb) DrawButtons(cb *renderer.CmdBuffer, layout DcbLayout) {
 	builder.GenerateCommands(cb)
 }
 
+func (d *Dcb) DrawText(
+	td *renderer.TextDrawBuilder,
+	font *renderer.BitmapFont,
+	layout DcbLayout,
+	hoveredIndex int,
+) {
+	if d == nil || td == nil || font == nil || layout.RenderFontSize <= 0 || len(layout.Buttons) == 0 {
+		return
+	}
+
+	td.SetFont(font)
+	for _, button := range layout.Buttons {
+		if button.Bounds.Empty() {
+			continue
+		}
+
+		d.drawButtonText(td, font, layout.RenderFontSize, button, button.Index == hoveredIndex)
+	}
+}
+
+func (d *Dcb) drawButtonText(
+	td *renderer.TextDrawBuilder,
+	font *renderer.BitmapFont,
+	fontSize int,
+	button DcbButtonLayout,
+	hovering bool,
+) {
+	spec := button.Spec
+	if spec.Kind == DcbButtonToggle {
+		d.drawToggleButtonText(td, font, fontSize, button, hovering)
+		return
+	}
+
+	d.drawCenteredTextLines(
+		td,
+		font,
+		fontSize,
+		button.Bounds,
+		d.textLinesForButton(spec),
+		d.primaryTextColor(spec, hovering),
+	)
+}
+
+func (d *Dcb) textLinesForButton(spec DcbButtonSpec) []string {
+	lines := append([]string(nil), spec.Lines...)
+	if spec.Kind != DcbButtonValue || !spec.ShowValue {
+		return lines
+	}
+
+	value := strings.TrimSpace(spec.Value)
+	if value == "" {
+		value = "0"
+	}
+
+	if len(lines) > 1 {
+		if _, err := strconv.Atoi(strings.TrimSpace(lines[1])); err == nil {
+			lines[1] = value
+			return lines
+		}
+		if len(lines) < 3 {
+			return append(lines, value)
+		}
+		lines[2] = value
+		return lines
+	}
+
+	return append(lines, value)
+}
+
+func (d *Dcb) drawCenteredTextLines(
+	td *renderer.TextDrawBuilder,
+	font *renderer.BitmapFont,
+	fontSize int,
+	bounds redsmath.Rect,
+	lines []string,
+	color renderer.RGB,
+) {
+	if td == nil || font == nil || bounds.Empty() || len(lines) == 0 {
+		return
+	}
+
+	type measuredLine struct {
+		text   string
+		width  int
+		height int
+	}
+
+	measured := make([]measuredLine, 0, len(lines))
+	totalHeight := 0
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		width, height := font.MeasureText(line, fontSize)
+		if height <= 0 {
+			continue
+		}
+
+		measured = append(measured, measuredLine{text: line, width: width, height: height})
+		totalHeight += height
+	}
+	if len(measured) == 0 {
+		return
+	}
+
+	totalHeight += (len(measured) - 1) * dcbTextLineSpacing
+	y := bounds.Min.Y + (bounds.Height()-float32(totalHeight))*0.5
+	style := renderer.TextStyle{
+		Size:  fontSize,
+		Color: color.ToRGBA(),
+	}
+
+	for i, line := range measured {
+		x := bounds.Min.X + (bounds.Width()-float32(line.width))*0.5
+		td.AddText(line.text, redsmath.Vec2{X: x, Y: y}, style)
+
+		y += float32(line.height)
+		if i != len(measured)-1 {
+			y += dcbTextLineSpacing
+		}
+	}
+}
+
+func (d *Dcb) drawToggleButtonText(
+	td *renderer.TextDrawBuilder,
+	font *renderer.BitmapFont,
+	fontSize int,
+	button DcbButtonLayout,
+	hovering bool,
+) {
+	if td == nil || font == nil || button.Bounds.Empty() {
+		return
+	}
+
+	spec := button.Spec
+	labelRows := make([]string, 0, len(spec.Lines))
+	totalHeight := 0
+	for _, line := range spec.Lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		_, height := font.MeasureText(line, fontSize)
+		if height <= 0 {
+			continue
+		}
+		labelRows = append(labelRows, line)
+		totalHeight += height + dcbTextLineSpacing
+	}
+
+	toggleWidth, toggleHeight := d.measureToggleFragments(font, fontSize, spec)
+	if toggleHeight <= 0 {
+		return
+	}
+	totalHeight += toggleHeight
+
+	bounds := button.Bounds
+	y := bounds.Min.Y + (bounds.Height()-float32(totalHeight))*0.5
+	primary := d.primaryTextColor(spec, hovering)
+	stylePrimary := renderer.TextStyle{
+		Size:  fontSize,
+		Color: primary.ToRGBA(),
+	}
+
+	for _, line := range labelRows {
+		width, height := font.MeasureText(line, fontSize)
+		x := bounds.Min.X + (bounds.Width()-float32(width))*0.5
+		td.AddText(line, redsmath.Vec2{X: x, Y: y}, stylePrimary)
+		y += float32(height + dcbTextLineSpacing)
+	}
+
+	x := bounds.Min.X + (bounds.Width()-float32(toggleWidth))*0.5
+	d.drawToggleFragments(td, font, fontSize, x, y, spec, primary)
+}
+
+func (d *Dcb) measureToggleFragments(
+	font *renderer.BitmapFont,
+	fontSize int,
+	spec DcbButtonSpec,
+) (width int, height int) {
+	if font == nil {
+		return 0, 0
+	}
+
+	fragments := d.toggleFragments(spec)
+	for i, fragment := range fragments {
+		fragmentWidth, fragmentHeight := font.MeasureText(fragment, fontSize)
+		width += fragmentWidth
+		if i != len(fragments)-1 {
+			width += dcbTextLineSpacing
+		}
+		if fragmentHeight > height {
+			height = fragmentHeight
+		}
+	}
+	return width, height
+}
+
+func (d *Dcb) drawToggleFragments(
+	td *renderer.TextDrawBuilder,
+	font *renderer.BitmapFont,
+	fontSize int,
+	x float32,
+	y float32,
+	spec DcbButtonSpec,
+	primary renderer.RGB,
+) {
+	if td == nil || font == nil {
+		return
+	}
+
+	fragments := d.toggleFragments(spec)
+	highlight := d.highlightTextColor()
+	colors := []renderer.RGB{primary, primary, primary}
+	if spec.On {
+		colors[0] = highlight
+	} else {
+		colors[2] = highlight
+	}
+
+	for i, fragment := range fragments {
+		if fragment == "" {
+			continue
+		}
+		td.AddText(fragment, redsmath.Vec2{X: x, Y: y}, renderer.TextStyle{
+			Size:  fontSize,
+			Color: colors[i].ToRGBA(),
+		})
+
+		width, _ := font.MeasureText(fragment, fontSize)
+		x += float32(width)
+		if i != len(fragments)-1 {
+			x += dcbTextLineSpacing
+		}
+	}
+}
+
+func (d *Dcb) toggleFragments(spec DcbButtonSpec) []string {
+	onLabel := strings.TrimSpace(spec.OnLabel)
+	if onLabel == "" {
+		onLabel = "ON"
+	}
+	offLabel := strings.TrimSpace(spec.OffLabel)
+	if offLabel == "" {
+		offLabel = "OFF"
+	}
+	return []string{onLabel, "/", offLabel}
+}
+
+func (d *Dcb) primaryTextColor(spec DcbButtonSpec, hovering bool) renderer.RGB {
+	if d == nil {
+		return dcbTextRGB
+	}
+	if spec.Kind == DcbButtonError {
+		return applyBrightness(dcbTextRGB, d.brightness, dcbMinBrightness)
+	}
+	if spec.Active {
+		return d.highlightTextColor()
+	}
+	if hovering && !spec.Depressed {
+		return applyBrightness(dcbTextHoverRGB, d.brightness, dcbMinBrightness)
+	}
+	return d.normalTextColor()
+}
+
+func (d *Dcb) highlightTextColor() renderer.RGB {
+	if d == nil {
+		return dcbHighlightRGB
+	}
+	return applyBrightness(dcbHighlightRGB, d.brightness, dcbMinBrightness)
+}
+
+func (d *Dcb) normalTextColor() renderer.RGB {
+	if d == nil {
+		return dcbTextRGB
+	}
+	return applyBrightness(dcbTextRGB, d.brightness, dcbMinBrightness)
+}
+
 func addDcbRect(builder *renderer.ColoredTrianglesBuilder, rect redsmath.Rect, color renderer.RGB) {
 	if builder == nil || rect.Empty() {
 		return
@@ -544,9 +881,10 @@ func (d *Dcb) HitTest(
 	point redsmath.Vec2,
 	displaySize redsmath.Vec2,
 	font *renderer.BitmapFont,
+	state DcbState,
 ) DcbHit {
 	hit := DcbHit{ButtonIndex: -1}
-	layout := d.Layout(displaySize, font)
+	layout := d.Layout(displaySize, font, state)
 	if layout.Bounds.Empty() || !layout.Bounds.Contains(point) {
 		return hit
 	}
@@ -567,6 +905,11 @@ func (d *Dcb) HitTest(
 	return hit
 }
 
-func (d *Dcb) Contains(point redsmath.Vec2, displaySize redsmath.Vec2, font *renderer.BitmapFont) bool {
-	return d.HitTest(point, displaySize, font).OverDcb
+func (d *Dcb) Contains(
+	point redsmath.Vec2,
+	displaySize redsmath.Vec2,
+	font *renderer.BitmapFont,
+	state DcbState,
+) bool {
+	return d.HitTest(point, displaySize, font, state).OverDcb
 }
