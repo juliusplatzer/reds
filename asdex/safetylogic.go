@@ -66,6 +66,10 @@ type surfaceHoldBar struct {
 	ID       string
 	RunwayID string
 
+	// LAHSO holdbars need separate activation rules, so normal arrival/departure
+	// holdbar illumination ignores them for now.
+	LAHSO bool
+
 	PointsFeet []redsmath.Vec2
 
 	RunwayIndex int
@@ -165,9 +169,11 @@ func LoadSafetyLogic(airport string, vm *VideoMap) (SafetyLogic, error) {
 			continue
 		}
 
+		id := strings.TrimSpace(src.ID)
 		hb := surfaceHoldBar{
-			ID:          strings.TrimSpace(src.ID),
+			ID:          id,
 			RunwayID:    runwayID,
+			LAHSO:       isLAHSOHoldBarID(id),
 			PointsFeet:  surfacePolylineToFeet(src.Polygon, vm),
 			RunwayIndex: runwayIndex,
 		}
@@ -180,6 +186,11 @@ func LoadSafetyLogic(airport string, vm *VideoMap) (SafetyLogic, error) {
 	}
 
 	return sl, nil
+}
+
+func isLAHSOHoldBarID(id string) bool {
+	id = strings.ToUpper(strings.TrimSpace(id))
+	return strings.HasPrefix(id, "LAHSO")
 }
 
 func surfacePolylineToFeet(coords [][]float64, vm *VideoMap) []redsmath.Vec2 {
@@ -545,6 +556,10 @@ func (sl *SafetyLogic) LitHoldBars() []surfaceHoldBar {
 
 	out := make([]surfaceHoldBar, 0)
 	for _, hb := range sl.holdBars {
+		if hb.LAHSO {
+			continue
+		}
+
 		for _, operation := range sl.activeOperations {
 			if hb.RunwayIndex != operation.RunwayIndex {
 				continue
