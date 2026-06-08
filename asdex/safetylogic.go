@@ -12,6 +12,9 @@ import (
 	"github.com/juliusplatzer/reds/util"
 )
 
+// SafetyLogic currently implements holdbar illumination for landing and
+// departure runway operations. Alert messages and aural safety alerts are
+// intentionally left out for now.
 const (
 	landingFinalRangeFeet         = 6076.12
 	landingPastThresholdFeet      = 800.0
@@ -19,7 +22,10 @@ const (
 	landingSpeedThresholdKt       = 40.0
 	landingAlignmentMinCos        = 0.9396926207859084
 	landingMaxAGLFeet             = 1500.0
+	departureSpeedThresholdKt     = 40.0
+	departureMaxAGLFeet           = 50.0
 	holdBarStationToleranceFeet   = 10.0
+	pointOnSegmentToleranceFeet   = 5.0
 	degenerateRunwayAxisLength2   = 1e-6
 	holdBarsBrightnessDefault     = 95
 	minRunwayPolygonVertexCount   = 3
@@ -33,8 +39,8 @@ type SafetyLogic struct {
 	runways  []surfaceRunway
 	holdBars []surfaceHoldBar
 
-	activeLandings map[string]activeLanding
-	litRunways     map[string]bool
+	activeOperations map[string]activeRunwayOperation
+	litRunways       map[string]bool
 }
 
 type surfaceRunway struct {
@@ -66,11 +72,19 @@ type surfaceHoldBar struct {
 	StationMaxFeet float32
 }
 
-type activeLanding struct {
+type activeRunwayOperationKind int
+
+const (
+	activeRunwayOperationLanding activeRunwayOperationKind = iota
+	activeRunwayOperationDeparture
+)
+
+type activeRunwayOperation struct {
 	TargetID string
 	RunwayID string
 
 	RunwayIndex int
+	Kind        activeRunwayOperationKind
 
 	DirectionFeet redsmath.Vec2
 
@@ -120,7 +134,7 @@ func LoadSafetyLogic(airport string, vm *VideoMap) (SafetyLogic, error) {
 
 	sl := SafetyLogic{
 		airportAltitudeFt: surface.AltitudeFt,
-		activeLandings:    make(map[string]activeLanding),
+		activeOperations:  make(map[string]activeRunwayOperation),
 		litRunways:        make(map[string]bool),
 	}
 
@@ -264,8 +278,8 @@ func (sl *SafetyLogic) Update(targets []*Target) {
 	if sl == nil {
 		return
 	}
-	if sl.activeLandings == nil {
-		sl.activeLandings = make(map[string]activeLanding)
+	if sl.activeOperations == nil {
+		sl.activeOperations = make(map[string]activeRunwayOperation)
 	}
 	if sl.litRunways == nil {
 		sl.litRunways = make(map[string]bool)
@@ -278,49 +292,65 @@ func (sl *SafetyLogic) Update(targets []*Target) {
 			continue
 		}
 		seen[target.ID] = true
-		sl.updateLandingForTarget(target)
+		sl.updateOperationForTarget(target)
 	}
 
-	for id := range sl.activeLandings {
+	for id := range sl.activeOperations {
 		if !seen[id] {
-			delete(sl.activeLandings, id)
+			delete(sl.activeOperations, id)
 		}
 	}
 
-	for _, landing := range sl.activeLandings {
-		sl.litRunways[landing.RunwayID] = true
+	for _, operation := range sl.activeOperations {
+		sl.litRunways[operation.RunwayID] = true
 	}
 }
 
-func (sl *SafetyLogic) updateLandingForTarget(target *Target) {
+func (sl *SafetyLogic) updateOperationForTarget(target *Target) {
 	if sl == nil || target == nil || target.ID == "" {
 		return
 	}
 	if len(sl.runways) == 0 {
-		delete(sl.activeLandings, target.ID)
+		delete(sl.activeOperations, target.ID)
 		return
 	}
 	if target.Suspended || target.Coasting || target.Dropped ||
-		!targetIsSafetyLogicAircraft(target) ||
-		target.GroundSpeedKt < landingSpeedThresholdKt {
-		delete(sl.activeLandings, target.ID)
+		!targetIsSafetyLogicAircraft(target) {
+		delete(sl.activeOperations, target.ID)
 		return
 	}
 
-	if landing, ok := sl.detectApproachLanding(target); ok {
-		sl.activeLandings[target.ID] = landing
+	if target.GroundSpeedKt >= landingSpeedThresholdKt {
+		if landing, ok := sl.detectApproachLanding(target); ok {
+			sl.activeOperations[target.ID] = landing
+			return
+		}
+	}
+
+	if departure, ok := sl.detectDeparture(target); ok {
+		sl.activeOperations[target.ID] = departure
 		return
 	}
 
-	previous, ok := sl.activeLandings[target.ID]
+	previous, ok := sl.activeOperations[target.ID]
 	if !ok {
 		return
 	}
-	if sl.continueRollout(target, previous) {
-		sl.activeLandings[target.ID] = sl.updatedRollout(target, previous)
-		return
+
+	switch previous.Kind {
+	case activeRunwayOperationLanding:
+		if sl.continueLandingRollout(target, previous) {
+			sl.activeOperations[target.ID] = sl.updatedOperation(target, previous)
+			return
+		}
+	case activeRunwayOperationDeparture:
+		if sl.continueDepartureRoll(target, previous) {
+			sl.activeOperations[target.ID] = sl.updatedOperation(target, previous)
+			return
+		}
 	}
-	delete(sl.activeLandings, target.ID)
+
+	delete(sl.activeOperations, target.ID)
 }
 
 func targetIsSafetyLogicAircraft(target *Target) bool {
@@ -328,16 +358,16 @@ func targetIsSafetyLogicAircraft(target *Target) bool {
 	return class == targetClassAircraft || class == targetClassHeavyAircraft
 }
 
-func (sl *SafetyLogic) detectApproachLanding(target *Target) (activeLanding, bool) {
+func (sl *SafetyLogic) detectApproachLanding(target *Target) (activeRunwayOperation, bool) {
 	if sl == nil || target == nil {
-		return activeLanding{}, false
+		return activeRunwayOperation{}, false
 	}
 	if target.HasAltitude && float64(target.AltitudeFt) > sl.airportAltitudeFt+landingMaxAGLFeet {
-		return activeLanding{}, false
+		return activeRunwayOperation{}, false
 	}
 
 	track := headingUnitVector(target.HeadingDeg)
-	var best activeLanding
+	var best activeRunwayOperation
 	bestDistance := float32(0)
 	found := false
 
@@ -367,7 +397,7 @@ func approachLandingForRunwayEnd(
 	rwy surfaceRunway,
 	runwayIndex int,
 	reverse bool,
-) (activeLanding, float32, bool) {
+) (activeRunwayOperation, float32, bool) {
 	threshold := rwy.ThresholdMinFeet
 	direction := rwy.AxisFeet
 	if reverse {
@@ -378,13 +408,13 @@ func approachLandingForRunwayEnd(
 	rel := target.PosFeet.Sub(threshold)
 	station := safetyDot(rel, direction)
 	if station < -landingFinalRangeFeet || station > landingPastThresholdFeet {
-		return activeLanding{}, 0, false
+		return activeRunwayOperation{}, 0, false
 	}
 	if abs32(safetyDot(rel, rwy.NormalFeet)) > landingMaxLateralOffsetFeet {
-		return activeLanding{}, 0, false
+		return activeRunwayOperation{}, 0, false
 	}
 	if safetyDot(track, direction) < landingAlignmentMinCos {
-		return activeLanding{}, 0, false
+		return activeRunwayOperation{}, 0, false
 	}
 
 	distance := float32(0)
@@ -392,10 +422,11 @@ func approachLandingForRunwayEnd(
 		distance = -station
 	}
 
-	return activeLanding{
+	return activeRunwayOperation{
 		TargetID:           target.ID,
 		RunwayID:           rwy.ID,
 		RunwayIndex:        runwayIndex,
+		Kind:               activeRunwayOperationLanding,
 		DirectionFeet:      direction,
 		StartThresholdFeet: threshold,
 		StationFeet:        station,
@@ -403,38 +434,123 @@ func approachLandingForRunwayEnd(
 	}, distance, true
 }
 
-func (sl *SafetyLogic) continueRollout(target *Target, landing activeLanding) bool {
-	if sl == nil || target == nil || landing.RunwayIndex < 0 || landing.RunwayIndex >= len(sl.runways) {
+func (sl *SafetyLogic) detectDeparture(target *Target) (activeRunwayOperation, bool) {
+	if sl == nil || target == nil {
+		return activeRunwayOperation{}, false
+	}
+	if !sl.targetOnGround(target) || target.GroundSpeedKt < departureSpeedThresholdKt {
+		return activeRunwayOperation{}, false
+	}
+
+	track := headingUnitVector(target.HeadingDeg)
+
+	var best activeRunwayOperation
+	bestAlignment := float32(-2)
+	found := false
+
+	for i, rwy := range sl.runways {
+		if !pointOnRunway(rwy, target.PosFeet) {
+			continue
+		}
+
+		alignment := safetyDot(track, rwy.AxisFeet)
+		direction := rwy.AxisFeet
+		startThreshold := rwy.ThresholdMinFeet
+		if alignment < 0 {
+			alignment = -alignment
+			direction = rwy.AxisFeet.Mul(-1)
+			startThreshold = rwy.ThresholdMaxFeet
+		}
+		if alignment < landingAlignmentMinCos {
+			continue
+		}
+
+		station := safetyDot(target.PosFeet.Sub(startThreshold), direction)
+		if !found || alignment > bestAlignment {
+			best = activeRunwayOperation{
+				TargetID:           target.ID,
+				RunwayID:           rwy.ID,
+				RunwayIndex:        i,
+				Kind:               activeRunwayOperationDeparture,
+				DirectionFeet:      direction,
+				StartThresholdFeet: startThreshold,
+				StationFeet:        station,
+				SpeedKt:            target.GroundSpeedKt,
+			}
+			bestAlignment = alignment
+			found = true
+		}
+	}
+
+	return best, found
+}
+
+func (sl *SafetyLogic) targetOnGround(target *Target) bool {
+	if sl == nil || target == nil || !target.HasAltitude {
+		return false
+	}
+
+	return float64(target.AltitudeFt) < sl.airportAltitudeFt+departureMaxAGLFeet
+}
+
+func (sl *SafetyLogic) continueLandingRollout(
+	target *Target,
+	operation activeRunwayOperation,
+) bool {
+	if sl == nil || target == nil || operation.RunwayIndex < 0 || operation.RunwayIndex >= len(sl.runways) {
 		return false
 	}
 	if target.GroundSpeedKt < landingSpeedThresholdKt {
 		return false
 	}
 
-	return pointInPolygon(sl.runways[landing.RunwayIndex].PolygonFeet, target.PosFeet)
+	return pointOnRunway(sl.runways[operation.RunwayIndex], target.PosFeet)
 }
 
-func (sl *SafetyLogic) updatedRollout(target *Target, landing activeLanding) activeLanding {
-	landing.StationFeet = safetyDot(target.PosFeet.Sub(landing.StartThresholdFeet), landing.DirectionFeet)
-	landing.SpeedKt = target.GroundSpeedKt
-	return landing
+func (sl *SafetyLogic) continueDepartureRoll(
+	target *Target,
+	operation activeRunwayOperation,
+) bool {
+	if sl == nil || target == nil || operation.RunwayIndex < 0 || operation.RunwayIndex >= len(sl.runways) {
+		return false
+	}
+	if target.GroundSpeedKt < departureSpeedThresholdKt || !sl.targetOnGround(target) {
+		return false
+	}
+
+	rwy := sl.runways[operation.RunwayIndex]
+	if !pointOnRunway(rwy, target.PosFeet) {
+		return false
+	}
+
+	track := headingUnitVector(target.HeadingDeg)
+	return safetyDot(track, operation.DirectionFeet) >= landingAlignmentMinCos
+}
+
+func (sl *SafetyLogic) updatedOperation(
+	target *Target,
+	operation activeRunwayOperation,
+) activeRunwayOperation {
+	operation.StationFeet = safetyDot(target.PosFeet.Sub(operation.StartThresholdFeet), operation.DirectionFeet)
+	operation.SpeedKt = target.GroundSpeedKt
+	return operation
 }
 
 func (sl *SafetyLogic) LitHoldBars() []surfaceHoldBar {
-	if sl == nil || len(sl.holdBars) == 0 || len(sl.activeLandings) == 0 {
+	if sl == nil || len(sl.holdBars) == 0 || len(sl.activeOperations) == 0 {
 		return nil
 	}
 
 	out := make([]surfaceHoldBar, 0)
 	for _, hb := range sl.holdBars {
-		for _, landing := range sl.activeLandings {
-			if hb.RunwayIndex != landing.RunwayIndex {
+		for _, operation := range sl.activeOperations {
+			if hb.RunwayIndex != operation.RunwayIndex {
 				continue
 			}
 			if hb.RunwayIndex < 0 || hb.RunwayIndex >= len(sl.runways) {
 				continue
 			}
-			if holdBarAheadOfLanding(hb, landing, sl.runways[landing.RunwayIndex]) {
+			if holdBarAheadOfOperation(hb, operation, sl.runways[operation.RunwayIndex]) {
 				out = append(out, hb)
 				break
 			}
@@ -443,15 +559,19 @@ func (sl *SafetyLogic) LitHoldBars() []surfaceHoldBar {
 	return out
 }
 
-func holdBarAheadOfLanding(hb surfaceHoldBar, landing activeLanding, rwy surfaceRunway) bool {
-	alignment := safetyDot(landing.DirectionFeet, rwy.AxisFeet)
+func holdBarAheadOfOperation(
+	hb surfaceHoldBar,
+	operation activeRunwayOperation,
+	rwy surfaceRunway,
+) bool {
+	alignment := safetyDot(operation.DirectionFeet, rwy.AxisFeet)
 
 	holdBarStart := hb.StationMinFeet
 	if alignment < 0 {
 		holdBarStart = rwy.LengthFeet - hb.StationMaxFeet
 	}
 
-	return landing.StationFeet < holdBarStart-holdBarStationToleranceFeet
+	return operation.StationFeet < holdBarStart-holdBarStationToleranceFeet
 }
 
 func (sl *SafetyLogic) DrawHoldBars(cb *renderer.CmdBuffer, brightness int) {
@@ -512,9 +632,30 @@ func boundsForPolygon(poly []redsmath.Vec2) redsmath.Rect {
 	return redsmath.NewRect(minX, minY, maxX, maxY)
 }
 
+func pointOnRunway(rwy surfaceRunway, p redsmath.Vec2) bool {
+	if rwy.BoundsFeet.Empty() {
+		return false
+	}
+	if p.X < rwy.BoundsFeet.Min.X-pointOnSegmentToleranceFeet ||
+		p.X > rwy.BoundsFeet.Max.X+pointOnSegmentToleranceFeet ||
+		p.Y < rwy.BoundsFeet.Min.Y-pointOnSegmentToleranceFeet ||
+		p.Y > rwy.BoundsFeet.Max.Y+pointOnSegmentToleranceFeet {
+		return false
+	}
+
+	return pointInPolygon(rwy.PolygonFeet, p)
+}
+
 func pointInPolygon(poly []redsmath.Vec2, p redsmath.Vec2) bool {
 	if len(poly) < minRunwayPolygonVertexCount {
 		return false
+	}
+
+	for i, a := range poly {
+		b := poly[(i+1)%len(poly)]
+		if pointNearSegment(p, a, b, pointOnSegmentToleranceFeet) {
+			return true
+		}
 	}
 
 	inside := false
@@ -531,6 +672,25 @@ func pointInPolygon(poly []redsmath.Vec2, p redsmath.Vec2) bool {
 		j = i
 	}
 	return inside
+}
+
+func pointNearSegment(p, a, b redsmath.Vec2, tolerance float32) bool {
+	ab := b.Sub(a)
+	len2 := safetyLength2(ab)
+	if len2 <= degenerateRunwayAxisLength2 {
+		return safetyLength2(p.Sub(a)) <= tolerance*tolerance
+	}
+
+	t := safetyDot(p.Sub(a), ab) / len2
+	if t < 0 {
+		t = 0
+	}
+	if t > 1 {
+		t = 1
+	}
+
+	closest := a.Add(ab.Mul(t))
+	return safetyLength2(p.Sub(closest)) <= tolerance*tolerance
 }
 
 func safetyDot(a, b redsmath.Vec2) float32 {
