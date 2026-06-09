@@ -28,7 +28,6 @@ const (
 	tempTextFontSizeDefault   = 2
 	tempTextBrightnessDefault = 95
 	tempTextLineSpacing       = 2
-	tempTextAnchorOffsetPx    = 7
 	tempTextStepPx            = 15
 	tempTextZeroLengthPx      = 10
 )
@@ -42,18 +41,36 @@ var (
 	tempTextHighlightRGB  = renderer.RGB8(0, 0, 255)
 )
 
-var tempTextAnchorPoints = []redsmath.Vec2{
-	{X: 11, Y: 0},
-	{X: 3, Y: -3},
-	{X: 3, Y: -12},
-	{X: -3, Y: -5},
-	{X: -12, Y: -8},
-	{X: -7, Y: 0},
-	{X: -12, Y: 8},
-	{X: -3, Y: 5},
-	{X: 3, Y: 12},
-	{X: 3, Y: 3},
-	{X: 11, Y: 0},
+var tempTextAnchorGeoOffsets = []struct {
+	lat float64
+	lon float64
+}{
+	{lat: 9.9e-05, lon: 4.5e-06},
+	{lat: 2.25e-05, lon: 3.15e-05},
+	{lat: 2.25e-05, lon: 0.0001125},
+	{lat: -2.7e-05, lon: 4.95e-05},
+	{lat: -0.0001035, lon: 7.2e-05},
+	{lat: -5.85e-05, lon: 4.5e-06},
+	{lat: -0.0001035, lon: -6.3e-05},
+	{lat: -2.7e-05, lon: -4.05e-05},
+	{lat: 2.25e-05, lon: -0.0001035},
+	{lat: 2.25e-05, lon: -2.25e-05},
+	{lat: 9.9e-05, lon: 4.5e-06},
+}
+
+var tempTextAnchorOffsetsFeet = makeTempTextAnchorOffsetsFeet()
+
+func makeTempTextAnchorOffsetsFeet() []redsmath.Vec2 {
+	out := make([]redsmath.Vec2, 0, len(tempTextAnchorGeoOffsets))
+	for _, p := range tempTextAnchorGeoOffsets {
+		out = append(out, redsmath.Vec2{
+			// CRC compensates longitude scale when drawing this symbol. In
+			// local feet, use one degree = 60 NM for both axes.
+			X: float32(p.lon * 60.0 * redsmath.FeetPerNM),
+			Y: float32(p.lat * 60.0 * redsmath.FeetPerNM),
+		})
+	}
+	return out
 }
 
 type TempDataType int
@@ -525,11 +542,16 @@ func (td *TempData) DrawTempTextAnchors(
 	builder := renderer.GetLinesBuilder()
 	defer renderer.ReturnLinesBuilder(builder)
 
+	pixelsPerFoot := tempTextPixelsPerFoot(transforms)
+	if pixelsPerFoot <= 0 {
+		return
+	}
+
 	for _, text := range td.texts {
 		if text.Hidden {
 			continue
 		}
-		addTempTextAnchor(builder, transforms.WindowFromWorldP(text.Location))
+		addTempTextAnchor(builder, transforms.WindowFromWorldP(text.Location), pixelsPerFoot)
 	}
 
 	cb.SetRGB(applyBrightness(tempTextRGB, brightness, brightnessFloorDefault))
@@ -537,16 +559,26 @@ func (td *TempData) DrawTempTextAnchors(
 	builder.GenerateCommands(cb)
 }
 
-func addTempTextAnchor(builder *renderer.LinesBuilder, center redsmath.Vec2) {
-	if builder == nil {
+func tempTextPixelsPerFoot(transforms radar.ScopeTransformations) float32 {
+	unit := transforms.WindowFromWorldV(redsmath.Vec2{X: 1, Y: 0})
+	return float32(stdmath.Hypot(float64(unit.X), float64(unit.Y)))
+}
+
+func addTempTextAnchor(
+	builder *renderer.LinesBuilder,
+	center redsmath.Vec2,
+	pixelsPerFoot float32,
+) {
+	if builder == nil || pixelsPerFoot <= 0 {
 		return
 	}
 
-	points := make([]renderer.PointVertex, 0, len(tempTextAnchorPoints))
-	for _, pt := range tempTextAnchorPoints {
+	points := make([]renderer.PointVertex, 0, len(tempTextAnchorOffsetsFeet))
+	for _, offset := range tempTextAnchorOffsetsFeet {
 		points = append(points, renderer.PointVertex{
-			X: center.X + pt.X,
-			Y: center.Y + pt.Y,
+			X: center.X + offset.X*pixelsPerFoot,
+			// Local feet Y is north/up; window Y is down.
+			Y: center.Y - offset.Y*pixelsPerFoot,
 		})
 	}
 	builder.AddLineStrip(points)
@@ -643,7 +675,7 @@ func drawOneTempText(
 		leaderLengthPx = 0
 	}
 
-	leaderStart := anchor.Add(leaderDelta(tempTextAnchorOffsetPx, heading))
+	leaderStart := anchor
 	anchorDistance := float32(leaderLengthPx)
 	if leaderLengthPx == 0 {
 		anchorDistance = tempTextZeroLengthPx
