@@ -904,6 +904,12 @@ func (p *ASDEXPane) handleTempTextKeyboard(ctx *panes.Context) bool {
 		cmd.MoveDown()
 		return true
 	case keyboard.WasPressed(platform.KeyEnter), keyboard.WasPressed(platform.KeyKeypadEnter):
+		if cmd.activeLine == 1 {
+			cmd.activeLine = 2
+			cmd.cursor = len([]rune(cmd.line2))
+			p.previewArea.SetSystemResponse("")
+			return true
+		}
 		p.submitTempTextCommand()
 		return true
 	}
