@@ -1,27 +1,71 @@
 package asdex
 
 import (
+	"fmt"
 	stdmath "math"
 	"strings"
 
 	redsmath "github.com/juliusplatzer/reds/math"
 	"github.com/juliusplatzer/reds/panes"
 	"github.com/juliusplatzer/reds/platform"
+	"github.com/juliusplatzer/reds/radar"
 	"github.com/juliusplatzer/reds/renderer"
 )
 
 const (
 	closedRunwayXAngleDeg         = 15.0
 	closedRunwayBrightnessDefault = 95
+
+	maxTempDataObjects = 100
+	maxTempAreaNodes   = 20
+	minTempAreaNodes   = 3
+
+	tempMapAreasBrightnessDefault = 95
+	tempAreaDrawLineWidth         = 1.0
+)
+
+var (
+	tempClosedAreaRGB     = renderer.RGB8(255, 0, 0)
+	tempRestrictedAreaRGB = renderer.RGB8(255, 255, 0)
+	tempAreaDrawRGB       = renderer.RGB8(255, 255, 255)
+	tempAreaHighlightRGB  = renderer.RGB8(0, 0, 255)
+)
+
+type TempDataType int
+
+const (
+	TempDataClosedArea TempDataType = iota
+	TempDataRestrictedArea
 )
 
 type TempData struct {
 	closedRunways map[string]bool
+
+	closedAreas []TempArea
+	nextAreaID  int
+}
+
+type TempArea struct {
+	ID       string
+	Type     TempDataType
+	Points   []redsmath.Vec2
+	Hidden   bool
+	Selected bool
+
+	meshVertices []renderer.PointVertex
+	meshIndices  []uint32
+}
+
+type TempAreaDraft struct {
+	Type   TempDataType
+	Points []redsmath.Vec2
+	Mouse  redsmath.Vec2
 }
 
 func NewTempData() TempData {
 	return TempData{
 		closedRunways: make(map[string]bool),
+		nextAreaID:    1,
 	}
 }
 
@@ -69,6 +113,59 @@ func (td *TempData) RunwayClosed(id string) bool {
 	return td.closedRunways[id]
 }
 
+func (td *TempData) VisibleObjectCount() int {
+	if td == nil {
+		return 0
+	}
+
+	count := 0
+	for _, area := range td.closedAreas {
+		if !area.Hidden {
+			count++
+		}
+	}
+	return count
+}
+
+func (td *TempData) AddArea(kind TempDataType, points []redsmath.Vec2) {
+	if td == nil || len(points) < minTempAreaNodes+1 {
+		return
+	}
+
+	vertices, indices := renderer.TessellateRings([][]redsmath.Vec2{points})
+	if len(vertices) == 0 || len(indices) == 0 {
+		return
+	}
+
+	area := TempArea{
+		ID:           td.nextTempAreaID(kind),
+		Type:         kind,
+		Points:       append([]redsmath.Vec2(nil), points...),
+		meshVertices: vertices,
+		meshIndices:  indices,
+	}
+
+	switch kind {
+	case TempDataClosedArea:
+		td.closedAreas = append(td.closedAreas, area)
+	}
+}
+
+func (td *TempData) nextTempAreaID(kind TempDataType) string {
+	if td.nextAreaID <= 0 {
+		td.nextAreaID = 1
+	}
+
+	prefix := "CLOSED"
+	if kind == TempDataRestrictedArea {
+		prefix = "RESTR"
+	}
+
+	id := fmt.Sprintf("%s:%d", prefix, td.nextAreaID)
+	td.nextAreaID++
+	return id
+}
+
 func (td *TempData) DrawClosedRunways(
 	cb *renderer.CmdBuffer,
 	sl *SafetyLogic,
@@ -91,6 +188,56 @@ func (td *TempData) DrawClosedRunways(
 	cb.SetRGB(applyBrightness(renderer.RGB8(255, 255, 255), brightness, brightnessFloorDefault))
 	cb.LineWidth(1)
 	builder.GenerateCommands(cb)
+}
+
+func (td *TempData) DrawClosedAreas(
+	cb *renderer.CmdBuffer,
+	transforms radar.ScopeTransformations,
+	brightness int,
+) {
+	if td == nil || cb == nil || len(td.closedAreas) == 0 {
+		return
+	}
+
+	color := applyBrightness(tempClosedAreaRGB, brightness, brightnessFloorDefault)
+
+	lineBuilder := renderer.GetLinesBuilder()
+	for _, area := range td.closedAreas {
+		if area.Hidden || len(area.Points) < 2 {
+			continue
+		}
+
+		points := make([]renderer.PointVertex, 0, len(area.Points))
+		for _, pt := range area.Points {
+			points = append(points, renderer.PointVertex{X: pt.X, Y: pt.Y})
+		}
+		lineBuilder.AddLineStrip(points)
+	}
+	cb.SetRGB(color)
+	cb.LineWidth(1)
+	lineBuilder.GenerateCommands(cb)
+	renderer.ReturnLinesBuilder(lineBuilder)
+
+	for _, area := range td.closedAreas {
+		if area.Hidden || len(area.meshVertices) == 0 || len(area.meshIndices) == 0 {
+			continue
+		}
+
+		triBuilder := renderer.GetTrianglesBuilder()
+		triBuilder.AddIndexed(area.meshVertices, area.meshIndices)
+		cb.SetRGB(color)
+		triBuilder.GenerateCommands(cb, renderer.DrawHatched, tempAreaHatchOffset(area, transforms))
+		renderer.ReturnTrianglesBuilder(triBuilder)
+	}
+}
+
+func tempAreaHatchOffset(area TempArea, transforms radar.ScopeTransformations) float32 {
+	if len(area.Points) == 0 {
+		return 0
+	}
+
+	p := transforms.WindowFromWorldP(area.Points[0])
+	return -float32(stdmath.Mod(float64(4*p.Y+p.X), 50))
 }
 
 func buildClosedRunwayXLines(
@@ -193,6 +340,9 @@ func (p *ASDEXPane) activateTempDataDcbHit(hit DcbHit) bool {
 	case DcbFunctionClosedRunway:
 		p.openTempDataClosedRunwayDcbMenu()
 		return true
+	case DcbFunctionDefineClosedArea:
+		p.startDefineClosedArea()
+		return true
 	case DcbFunctionCloseRunway:
 		if strings.TrimSpace(hit.Label) == "" {
 			return true
@@ -202,7 +352,6 @@ func (p *ASDEXPane) activateTempDataDcbHit(hit DcbHit) bool {
 		p.clearHighlightedTarget()
 		return true
 	case DcbFunctionStoredGlobalTempData,
-		DcbFunctionDefineClosedArea,
 		DcbFunctionDefineRestrictedArea,
 		DcbFunctionDefineTempText,
 		DcbFunctionShowHiddenTempData,
@@ -214,11 +363,231 @@ func (p *ASDEXPane) activateTempDataDcbHit(hit DcbHit) bool {
 	}
 }
 
+func (p *ASDEXPane) startDefineClosedArea() {
+	if p == nil {
+		return
+	}
+
+	if p.tempData.VisibleObjectCount() >= maxTempDataObjects {
+		p.previewArea.SetSystemResponse("ERROR: MAX LIMIT")
+		return
+	}
+
+	p.clearTempDataCommandConflicts()
+	p.dcbMenuCommand = NewDcbMenuCommand("TEMP DATA", "DEFINE CLOSED AREA")
+	p.tempAreaDraft = &TempAreaDraft{
+		Type:   TempDataClosedArea,
+		Points: make([]redsmath.Vec2, 0, maxTempAreaNodes+1),
+	}
+	p.previewArea.SetSystemResponse("")
+	p.clearHighlightedTarget()
+}
+
+func (p *ASDEXPane) updateTempAreaDraftMouse(
+	ctx *panes.Context,
+	transforms radar.ScopeTransformations,
+) {
+	if p == nil || p.tempAreaDraft == nil || ctx == nil || ctx.Mouse == nil {
+		return
+	}
+
+	p.tempAreaDraft.Mouse = transforms.WorldFromWindowP(ctx.Mouse.Pos)
+}
+
+func (p *ASDEXPane) consumeTempAreaDraftInput(
+	ctx *panes.Context,
+	transforms radar.ScopeTransformations,
+) bool {
+	if p == nil || p.tempAreaDraft == nil || ctx == nil || ctx.Mouse == nil {
+		return false
+	}
+
+	mouse := ctx.Mouse
+	world := transforms.WorldFromWindowP(mouse.Pos)
+	p.tempAreaDraft.Mouse = world
+
+	switch {
+	case mouse.WasReleased(platform.MouseButtonLeft):
+		p.addTempAreaDraftPoint(world)
+		return true
+	case mouse.WasReleased(platform.MouseButtonMiddle):
+		p.finishTempAreaDraft()
+		return true
+	default:
+		return false
+	}
+}
+
+func (p *ASDEXPane) addTempAreaDraftPoint(point redsmath.Vec2) {
+	if p == nil || p.tempAreaDraft == nil {
+		return
+	}
+
+	draft := p.tempAreaDraft
+	if len(draft.Points) > 0 {
+		last := draft.Points[len(draft.Points)-1]
+		if tempSegmentWouldSelfIntersect(last, point, draft.Points) {
+			return
+		}
+	}
+
+	draft.Points = append(draft.Points, point)
+	p.previewArea.SetSystemResponse("")
+
+	if len(draft.Points) >= maxTempAreaNodes {
+		p.finishTempAreaDraft()
+	}
+}
+
+func (p *ASDEXPane) finishTempAreaDraft() {
+	if p == nil || p.tempAreaDraft == nil {
+		return
+	}
+
+	draft := p.tempAreaDraft
+	if len(draft.Points) < minTempAreaNodes {
+		draft.Points = draft.Points[:0]
+		p.previewArea.SetSystemResponse("BAD POLYGON,REDRAW POINT")
+		return
+	}
+
+	last := draft.Points[len(draft.Points)-1]
+	first := draft.Points[0]
+	if tempClosingSegmentWouldSelfIntersect(last, first, draft.Points) {
+		p.previewArea.SetSystemResponse("BAD POLYGON,REDRAW POINT")
+		return
+	}
+
+	closed := append([]redsmath.Vec2(nil), draft.Points...)
+	closed = append(closed, first)
+	p.tempData.AddArea(draft.Type, closed)
+
+	p.tempAreaDraft = nil
+	p.dcb.SetMenu(DcbMenuTempData)
+	p.dcbMenuCommand = NewDcbMenuCommand("TEMP DATA")
+	p.previewArea.SetSystemResponse("")
+	p.clearHighlightedTarget()
+}
+
+func (p *ASDEXPane) cancelTempAreaDraft() {
+	if p == nil || p.tempAreaDraft == nil {
+		return
+	}
+
+	p.tempAreaDraft = nil
+	p.dcb.SetMenu(DcbMenuTempData)
+	p.dcbMenuCommand = NewDcbMenuCommand("TEMP DATA")
+	p.previewArea.SetSystemResponse("")
+	p.clearHighlightedTarget()
+}
+
+func (p *ASDEXPane) DrawTempAreaDraft(cb *renderer.CmdBuffer) {
+	if p == nil || p.tempAreaDraft == nil || cb == nil {
+		return
+	}
+
+	draft := p.tempAreaDraft
+	if len(draft.Points) == 0 {
+		return
+	}
+
+	points := make([]renderer.PointVertex, 0, len(draft.Points)+1)
+	for _, pt := range draft.Points {
+		points = append(points, renderer.PointVertex{X: pt.X, Y: pt.Y})
+	}
+	points = append(points, renderer.PointVertex{X: draft.Mouse.X, Y: draft.Mouse.Y})
+
+	builder := renderer.GetLinesBuilder()
+	defer renderer.ReturnLinesBuilder(builder)
+
+	builder.AddLineStrip(points)
+	cb.SetRGB(applyBrightness(tempAreaDrawRGB, brightnessDefault, brightnessFloorDefault))
+	cb.LineWidth(tempAreaDrawLineWidth)
+	builder.GenerateCommands(cb)
+}
+
+func tempSegmentWouldSelfIntersect(
+	a redsmath.Vec2,
+	b redsmath.Vec2,
+	points []redsmath.Vec2,
+) bool {
+	if len(points) < 2 {
+		return false
+	}
+
+	for i := 0; i+1 < len(points); i++ {
+		if segmentsIntersectStrict(a, b, points[i], points[i+1]) {
+			return true
+		}
+	}
+	return false
+}
+
+func tempClosingSegmentWouldSelfIntersect(
+	last redsmath.Vec2,
+	first redsmath.Vec2,
+	points []redsmath.Vec2,
+) bool {
+	if len(points) < minTempAreaNodes {
+		return false
+	}
+
+	for i := 0; i+1 < len(points)-1; i++ {
+		if segmentsIntersectStrict(last, first, points[i], points[i+1]) {
+			return true
+		}
+	}
+	return false
+}
+
+func segmentsIntersectStrict(a, b, c, d redsmath.Vec2) bool {
+	intersection, ok := segmentIntersectionPoint(a, b, c, d)
+	if !ok {
+		return false
+	}
+
+	const tolerance = 1e-3
+	if almostEqualVec2(intersection, a, tolerance) ||
+		almostEqualVec2(intersection, b, tolerance) {
+		return false
+	}
+	return true
+}
+
+func segmentIntersectionPoint(
+	a redsmath.Vec2,
+	b redsmath.Vec2,
+	c redsmath.Vec2,
+	d redsmath.Vec2,
+) (redsmath.Vec2, bool) {
+	r := b.Sub(a)
+	s := d.Sub(c)
+	denominator := cross2(r, s)
+	if abs32(denominator) < degenerateRunwayAxisLength2 {
+		return redsmath.Vec2{}, false
+	}
+
+	cma := c.Sub(a)
+	t := cross2(cma, s) / denominator
+	u := cross2(cma, r) / denominator
+	if t < 0 || t > 1 || u < 0 || u > 1 {
+		return redsmath.Vec2{}, false
+	}
+
+	return a.Add(r.Mul(t)), true
+}
+
+func almostEqualVec2(a, b redsmath.Vec2, tolerance float32) bool {
+	d := a.Sub(b)
+	return d.X*d.X+d.Y*d.Y <= tolerance*tolerance
+}
+
 func (p *ASDEXPane) clearTempDataCommandConflicts() {
 	if p == nil {
 		return
 	}
 
+	p.tempAreaDraft = nil
 	p.dcbSpinner = nil
 	p.commandEntry.Clear()
 	p.datablockEdit = nil
@@ -273,6 +642,7 @@ func (p *ASDEXPane) closeDcbCurrentSubmenu() {
 		return
 	}
 
+	p.tempAreaDraft = nil
 	p.dcbSpinner = nil
 	p.previewArea.SetSystemResponse("")
 	p.clearHighlightedTarget()
@@ -288,6 +658,7 @@ func (p *ASDEXPane) closeDcbSubmenu() {
 	}
 	p.dcbMenuCommand = nil
 	p.dcbSpinner = nil
+	p.tempAreaDraft = nil
 	p.previewArea.SetSystemResponse("")
 	p.clearHighlightedTarget()
 }
@@ -301,6 +672,10 @@ func (p *ASDEXPane) handleDcbMenuKeyboard(ctx *panes.Context) bool {
 	if keyboard.WasPressed(platform.KeyEscape) ||
 		keyboard.WasPressed(platform.KeyBackspace) ||
 		keyboard.WasPressed(platform.KeyDelete) {
+		if p.tempAreaDraft != nil {
+			p.cancelTempAreaDraft()
+			return true
+		}
 		p.closeDcbCurrentSubmenu()
 		return true
 	}

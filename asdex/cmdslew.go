@@ -87,6 +87,7 @@ func (ap *ASDEXPane) cmdRSlew(
 	ap.mapRotate = nil
 	ap.dcbSpinner = nil
 	ap.dcbMenuCommand = nil
+	ap.tempAreaDraft = nil
 	ap.dcb.ReturnToMainMenu()
 	ap.previewArea.SetSystemResponse("")
 	ap.clearHighlightedTarget()

@@ -970,6 +970,7 @@ func (ap *ASDEXPane) applyCommandStatus(status CommandStatus) {
 		ap.mapRotate = nil
 		ap.dcbSpinner = nil
 		ap.dcbMenuCommand = nil
+		ap.tempAreaDraft = nil
 		ap.dcb.ReturnToMainMenu()
 		ap.commandEntry.Clear()
 	case ClearInput:
