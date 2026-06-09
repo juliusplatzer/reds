@@ -58,7 +58,10 @@ func (ap *ASDEXPane) cmdBareAircraftSlew(
 		return CommandStatus{}
 	}
 
-	target.ShowDB = !target.ShowDB
+	windowID := ap.activeWindowID()
+	settings := ap.dataBlockSettingsForWindow(windowID)
+	current := ap.targetShowsDataBlockInWindow(target, windowID, settings)
+	ap.setTargetShowDBOverride(windowID, target.ID, !current)
 	return CommandStatus{}
 }
 

@@ -81,9 +81,9 @@ func (wm *ScopeWindowManager) CanAddSecondary() bool {
 	return wm != nil && len(wm.secondary) < maxSecondaryWindows
 }
 
-func (wm *ScopeWindowManager) AddSecondary(rect redsmath.Rect, view ScopeView) bool {
+func (wm *ScopeWindowManager) AddSecondary(rect redsmath.Rect, view ScopeView) (ScopeWindowID, bool) {
 	if wm == nil || !wm.CanAddSecondary() || rect.Empty() {
-		return false
+		return 0, false
 	}
 
 	id := wm.nextID
@@ -93,7 +93,32 @@ func (wm *ScopeWindowManager) AddSecondary(rect redsmath.Rect, view ScopeView) b
 		Rect: rect,
 		View: view,
 	})
-	return true
+	return id, true
+}
+
+func (wm *ScopeWindowManager) SetActiveWindow(id ScopeWindowID) {
+	if wm == nil {
+		return
+	}
+
+	if id == mainScopeWindowID {
+		wm.activeID = id
+		return
+	}
+
+	for _, win := range wm.secondary {
+		if !win.Hidden && win.ID == id {
+			wm.activeID = id
+			return
+		}
+	}
+}
+
+func (wm *ScopeWindowManager) ActiveWindowID() ScopeWindowID {
+	if wm == nil {
+		return mainScopeWindowID
+	}
+	return wm.activeID
 }
 
 func (wm *ScopeWindowManager) ProposedWindowIsValid(rect redsmath.Rect, paneSize redsmath.Vec2) bool {
@@ -233,11 +258,45 @@ func (p *ASDEXPane) consumeNewWindowInput(
 		Rotation:     main.Rotation,
 	}
 
-	p.windows.AddSecondary(rect, view)
+	id, ok := p.windows.AddSecondary(rect, view)
+	if ok {
+		p.setDataBlockSettingsForWindow(
+			id,
+			p.dataBlockSettingsForWindow(mainScopeWindowID),
+		)
+	}
 	p.newWindow = nil
 	p.previewArea.SetSystemResponse("")
 	p.clearHighlightedTarget()
 	return true
+}
+
+func (p *ASDEXPane) maybeActivateScopeWindowOnLeftPress(ctx *panes.Context) {
+	if p == nil || ctx == nil || ctx.Mouse == nil {
+		return
+	}
+	if !ctx.Mouse.WasPressed(platform.MouseButtonLeft) {
+		return
+	}
+
+	if p.commandMode != CommandModeNone ||
+		p.datablockEdit != nil ||
+		p.newWindow != nil ||
+		p.mapReposition != nil ||
+		p.mapRotate != nil ||
+		p.listRepositionActive() ||
+		p.tempAreaDraft != nil ||
+		p.tempTextCommand != nil ||
+		p.tempTextPlacement != nil ||
+		p.tempDataSelectMode != TempDataSelectNone {
+		return
+	}
+
+	windowID, _, _, ok := p.scopeWindowAtPoint(ctx.Mouse.Pos, ctx.PaneSize())
+	if !ok {
+		return
+	}
+	p.windows.SetActiveWindow(windowID)
 }
 
 func (p *ASDEXPane) handleNewWindowKeyboard(ctx *panes.Context) bool {

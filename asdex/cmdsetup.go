@@ -348,7 +348,11 @@ func (ap *ASDEXPane) cmdDataBlocksOnOff(_ *panes.Context) CommandStatus {
 		return CommandStatus{Clear: ClearAll}
 	}
 
-	ap.datablockSettings.ShowDataBlocks = !ap.datablockSettings.ShowDataBlocks
+	windowID := ap.activeWindowID()
+	settings := ap.dataBlockSettingsForWindow(windowID)
+	settings.ShowDataBlocks = !settings.ShowDataBlocks
+	ap.setDataBlockSettingsForWindow(windowID, settings)
+	ap.clearTargetShowDBOverrides(windowID)
 
 	return CommandStatus{
 		Clear:     ClearAll,
@@ -588,8 +592,11 @@ func (ap *ASDEXPane) cmdLeaderDirectionAll(
 		return CommandStatus{Clear: ClearAll}
 	}
 
-	ap.datablockSettings.LeaderDirection = input.Direction
-	clear(ap.leaderDirectionByTarget)
+	windowID := ap.activeWindowID()
+	settings := ap.dataBlockSettingsForWindow(windowID)
+	settings.LeaderDirection = input.Direction
+	ap.setDataBlockSettingsForWindow(windowID, settings)
+	ap.clearLeaderDirectionOverrides(windowID)
 
 	return CommandStatus{
 		Clear:     ClearAll,
@@ -616,10 +623,7 @@ func (ap *ASDEXPane) cmdLeaderDirectionSlew(
 		return commandOutputClearAll("INVALID ENTRY")
 	}
 
-	if ap.leaderDirectionByTarget == nil {
-		ap.leaderDirectionByTarget = make(map[string]LeaderDirection)
-	}
-	ap.leaderDirectionByTarget[target.ID] = input.Direction
+	ap.setLeaderDirectionOverride(ap.activeWindowID(), target.ID, input.Direction)
 
 	return CommandStatus{
 		Clear:     ClearAll,
@@ -636,8 +640,11 @@ func (ap *ASDEXPane) cmdLeaderLengthAll(
 		return CommandStatus{Clear: ClearAll}
 	}
 
-	ap.datablockSettings.LeaderLength = input.Value
-	clear(ap.leaderLengthByTarget)
+	windowID := ap.activeWindowID()
+	settings := ap.dataBlockSettingsForWindow(windowID)
+	settings.LeaderLength = input.Value
+	ap.setDataBlockSettingsForWindow(windowID, settings)
+	ap.clearLeaderLengthOverrides(windowID)
 
 	return CommandStatus{
 		Clear:     ClearAll,
@@ -664,10 +671,7 @@ func (ap *ASDEXPane) cmdLeaderLengthSlew(
 		return commandOutputClearAll("INVALID LNG")
 	}
 
-	if ap.leaderLengthByTarget == nil {
-		ap.leaderLengthByTarget = make(map[string]int)
-	}
-	ap.leaderLengthByTarget[target.ID] = input.Value
+	ap.setLeaderLengthOverride(ap.activeWindowID(), target.ID, input.Value)
 
 	return CommandStatus{
 		Clear:     ClearAll,

@@ -97,10 +97,11 @@ type ASDEXPane struct {
 	cursors    CursorSet
 	cursorMode CursorMode
 
-	datablockSettings         DataBlockSettings
+	datablockSettingsByWindow map[ScopeWindowID]DataBlockSettings
 	datablockTimeshareStart   time.Time
-	leaderDirectionByTarget   map[string]LeaderDirection
-	leaderLengthByTarget      map[string]int
+	targetShowDBByWindow      map[ScopeWindowID]map[string]bool
+	leaderDirectionByWindow   map[ScopeWindowID]map[string]LeaderDirection
+	leaderLengthByWindow      map[ScopeWindowID]map[string]int
 	showBeaconUntilByTargetID map[string]time.Time
 	previewArea               PreviewArea
 	coastList                 CoastList
@@ -194,10 +195,13 @@ func NewPane(airport string) (*ASDEXPane, error) {
 		fonts:             fonts,
 		eramTextFonts:     eramTextFonts,
 
-		datablockSettings:         DefaultDataBlockSettings(),
+		datablockSettingsByWindow: map[ScopeWindowID]DataBlockSettings{
+			mainScopeWindowID: DefaultDataBlockSettings(),
+		},
 		datablockTimeshareStart:   time.Now(),
-		leaderDirectionByTarget:   make(map[string]LeaderDirection),
-		leaderLengthByTarget:      make(map[string]int),
+		targetShowDBByWindow:      make(map[ScopeWindowID]map[string]bool),
+		leaderDirectionByWindow:   make(map[ScopeWindowID]map[string]LeaderDirection),
+		leaderLengthByWindow:      make(map[ScopeWindowID]map[string]int),
 		showBeaconUntilByTargetID: make(map[string]time.Time),
 		previewArea:               preview,
 		coastList:                 coastList,
@@ -360,6 +364,7 @@ func (p *ASDEXPane) Draw(ctx *panes.Context, zcb *renderer.ZCmdBuffer) {
 		if p.consumeDcbInput(ctx) {
 			p.clearHighlightedTarget()
 		} else {
+			p.maybeActivateScopeWindowOnLeftPress(ctx)
 			if ctx.Mouse == nil {
 				p.clearHighlightedTarget()
 			} else {
@@ -406,12 +411,12 @@ func (p *ASDEXPane) Draw(ctx *panes.Context, zcb *renderer.ZCmdBuffer) {
 	p.safetyLogic.Update(targets)
 
 	mainRect := redsmath.RectFromSize(ctx.PaneSize().X, ctx.PaneSize().Y)
-	transforms = p.renderScopeWindow(ctx, zcb, 0, mainRect, p.mainScopeView(), targets, now, true)
+	transforms = p.renderScopeWindow(ctx, zcb, 0, mainScopeWindowID, mainRect, p.mainScopeView(), targets, now, true)
 	for i, win := range p.windows.secondary {
 		if win.Hidden {
 			continue
 		}
-		p.renderScopeWindow(ctx, zcb, i+1, win.Rect, win.View, targets, now, false)
+		p.renderScopeWindow(ctx, zcb, i+1, win.ID, win.Rect, win.View, targets, now, false)
 	}
 	p.renderWindowBorders(ctx, zcb, transforms)
 	p.renderNewWindowPreview(ctx, zcb, transforms)
@@ -481,6 +486,7 @@ func (p *ASDEXPane) renderScopeWindow(
 	ctx *panes.Context,
 	zcb *renderer.ZCmdBuffer,
 	stackIndex int,
+	windowID ScopeWindowID,
 	rect redsmath.Rect,
 	view ScopeView,
 	targets []*Target,
@@ -585,7 +591,7 @@ func (p *ASDEXPane) renderScopeWindow(
 	)
 	suspendedLabelCB.DisableScissor()
 
-	datablockSettings := p.dataBlockSettings()
+	datablockSettings := p.dataBlockSettingsForWindow(windowID)
 	dbCB := zcb.At(scopeWindowZ(stackIndex, zDatablocks))
 	dbCB.Viewport(x, y, w, h)
 	dbCB.Scissor(x, y, w, h)
@@ -601,14 +607,17 @@ func (p *ASDEXPane) renderScopeWindow(
 			SettingsForTarget: func(target *Target) DataBlockSettings {
 				settings := datablockSettings
 				if target != nil {
-					if direction, ok := p.leaderDirectionByTarget[target.ID]; ok {
+					if direction, ok := p.leaderDirectionOverride(windowID, target.ID); ok {
 						settings.LeaderDirection = direction
 					}
-					if length, ok := p.leaderLengthByTarget[target.ID]; ok {
+					if length, ok := p.leaderLengthOverride(windowID, target.ID); ok {
 						settings.LeaderLength = length
 					}
 				}
 				return settings
+			},
+			ShowDataBlockForTarget: func(target *Target, settings DataBlockSettings) bool {
+				return p.targetShowsDataBlockInWindow(target, windowID, settings)
 			},
 			ShowBeaconCodeForTarget: func(target *Target) bool {
 				return p.showBeaconCodeForTarget(target, now)
@@ -958,14 +967,187 @@ func (p *ASDEXPane) setRangeSetting(rangeSetting int) {
 }
 
 func (p *ASDEXPane) dataBlockSettings() DataBlockSettings {
-	settings := DefaultDataBlockSettings()
+	return p.dataBlockSettingsForWindow(p.activeWindowID())
+}
+
+func (p *ASDEXPane) activeWindowID() ScopeWindowID {
 	if p == nil {
+		return mainScopeWindowID
+	}
+	return p.windows.ActiveWindowID()
+}
+
+func (p *ASDEXPane) dataBlockSettingsForWindow(id ScopeWindowID) DataBlockSettings {
+	if p == nil {
+		settings := DefaultDataBlockSettings()
+		settings.TimesharePrimary = true
 		return settings
 	}
 
-	settings = p.datablockSettings
+	if p.datablockSettingsByWindow == nil {
+		p.datablockSettingsByWindow = make(map[ScopeWindowID]DataBlockSettings)
+	}
+
+	settings, ok := p.datablockSettingsByWindow[id]
+	if !ok {
+		settings = DefaultDataBlockSettings()
+		p.datablockSettingsByWindow[id] = settings
+	}
 	settings.TimesharePrimary = p.timesharePrimary(time.Now())
 	return settings
+}
+
+func (p *ASDEXPane) setDataBlockSettingsForWindow(id ScopeWindowID, settings DataBlockSettings) {
+	if p == nil {
+		return
+	}
+	if p.datablockSettingsByWindow == nil {
+		p.datablockSettingsByWindow = make(map[ScopeWindowID]DataBlockSettings)
+	}
+	p.datablockSettingsByWindow[id] = settings
+}
+
+func (p *ASDEXPane) targetShowDBOverride(
+	windowID ScopeWindowID,
+	targetID string,
+) (bool, bool) {
+	if p == nil || p.targetShowDBByWindow == nil {
+		return false, false
+	}
+
+	byTarget := p.targetShowDBByWindow[windowID]
+	if byTarget == nil {
+		return false, false
+	}
+
+	value, ok := byTarget[targetID]
+	return value, ok
+}
+
+func (p *ASDEXPane) setTargetShowDBOverride(
+	windowID ScopeWindowID,
+	targetID string,
+	value bool,
+) {
+	if p == nil || targetID == "" {
+		return
+	}
+
+	if p.targetShowDBByWindow == nil {
+		p.targetShowDBByWindow = make(map[ScopeWindowID]map[string]bool)
+	}
+	if p.targetShowDBByWindow[windowID] == nil {
+		p.targetShowDBByWindow[windowID] = make(map[string]bool)
+	}
+	p.targetShowDBByWindow[windowID][targetID] = value
+}
+
+func (p *ASDEXPane) clearTargetShowDBOverrides(windowID ScopeWindowID) {
+	if p == nil || p.targetShowDBByWindow == nil {
+		return
+	}
+	delete(p.targetShowDBByWindow, windowID)
+}
+
+func (p *ASDEXPane) targetShowsDataBlockInWindow(
+	target *Target,
+	windowID ScopeWindowID,
+	settings DataBlockSettings,
+) bool {
+	if target == nil || target.Suspended || target.Dropped {
+		return false
+	}
+	if !targetCanHaveDataBlock(target) {
+		return false
+	}
+
+	if override, ok := p.targetShowDBOverride(windowID, target.ID); ok {
+		return override
+	}
+
+	if !target.ShowDB {
+		return false
+	}
+
+	return settings.ShowDataBlocks
+}
+
+func (p *ASDEXPane) leaderDirectionOverride(
+	windowID ScopeWindowID,
+	targetID string,
+) (LeaderDirection, bool) {
+	if p == nil || p.leaderDirectionByWindow == nil {
+		return LeaderNE, false
+	}
+	byTarget := p.leaderDirectionByWindow[windowID]
+	if byTarget == nil {
+		return LeaderNE, false
+	}
+	value, ok := byTarget[targetID]
+	return value, ok
+}
+
+func (p *ASDEXPane) setLeaderDirectionOverride(
+	windowID ScopeWindowID,
+	targetID string,
+	value LeaderDirection,
+) {
+	if p == nil || targetID == "" {
+		return
+	}
+	if p.leaderDirectionByWindow == nil {
+		p.leaderDirectionByWindow = make(map[ScopeWindowID]map[string]LeaderDirection)
+	}
+	if p.leaderDirectionByWindow[windowID] == nil {
+		p.leaderDirectionByWindow[windowID] = make(map[string]LeaderDirection)
+	}
+	p.leaderDirectionByWindow[windowID][targetID] = value
+}
+
+func (p *ASDEXPane) clearLeaderDirectionOverrides(windowID ScopeWindowID) {
+	if p == nil || p.leaderDirectionByWindow == nil {
+		return
+	}
+	delete(p.leaderDirectionByWindow, windowID)
+}
+
+func (p *ASDEXPane) leaderLengthOverride(
+	windowID ScopeWindowID,
+	targetID string,
+) (int, bool) {
+	if p == nil || p.leaderLengthByWindow == nil {
+		return 0, false
+	}
+	byTarget := p.leaderLengthByWindow[windowID]
+	if byTarget == nil {
+		return 0, false
+	}
+	value, ok := byTarget[targetID]
+	return value, ok
+}
+
+func (p *ASDEXPane) setLeaderLengthOverride(
+	windowID ScopeWindowID,
+	targetID string,
+	value int,
+) {
+	if p == nil || targetID == "" {
+		return
+	}
+	if p.leaderLengthByWindow == nil {
+		p.leaderLengthByWindow = make(map[ScopeWindowID]map[string]int)
+	}
+	if p.leaderLengthByWindow[windowID] == nil {
+		p.leaderLengthByWindow[windowID] = make(map[string]int)
+	}
+	p.leaderLengthByWindow[windowID][targetID] = value
+}
+
+func (p *ASDEXPane) clearLeaderLengthOverrides(windowID ScopeWindowID) {
+	if p == nil || p.leaderLengthByWindow == nil {
+		return
+	}
+	delete(p.leaderLengthByWindow, windowID)
 }
 
 func (p *ASDEXPane) timesharePrimary(now time.Time) bool {
