@@ -970,6 +970,12 @@ func (ap *ASDEXPane) applyCommandStatus(status CommandStatus) {
 		ap.mapRotate = nil
 		ap.dcbSpinner = nil
 		ap.dcbMenuCommand = nil
+		ap.tempAreaDraft = nil
+		ap.tempTextCommand = nil
+		ap.tempTextPlacement = nil
+		ap.tempDataSelectMode = TempDataSelectNone
+		ap.hoveredTempData = TempDataHit{Kind: TempDataHitNone, Index: -1}
+		ap.tempData.ClearHighlights()
 		ap.dcb.ReturnToMainMenu()
 		ap.commandEntry.Clear()
 	case ClearInput:
@@ -983,6 +989,10 @@ func (ap *ASDEXPane) consumeOpsHotkeys(
 	transforms radar.ScopeTransformations,
 ) bool {
 	if ap == nil || ctx == nil || ctx.Keyboard == nil || ap.datablockEdit != nil {
+		return false
+	}
+	if ap.tempAreaDraft != nil || ap.tempTextCommand != nil || ap.tempTextPlacement != nil ||
+		ap.tempDataSelectMode != TempDataSelectNone {
 		return false
 	}
 	if ap.commandMode != CommandModeNone {

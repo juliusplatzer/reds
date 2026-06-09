@@ -362,6 +362,12 @@ func (ap *ASDEXPane) cmdMultiFunction(_ *panes.Context) CommandStatus {
 	ap.mapRotate = nil
 	ap.dcbSpinner = nil
 	ap.dcbMenuCommand = nil
+	ap.tempAreaDraft = nil
+	ap.tempTextCommand = nil
+	ap.tempTextPlacement = nil
+	ap.tempDataSelectMode = TempDataSelectNone
+	ap.hoveredTempData = TempDataHit{Kind: TempDataHitNone, Index: -1}
+	ap.tempData.ClearHighlights()
 	ap.dcb.ReturnToMainMenu()
 	ap.datablockEdit = nil
 	ap.editingTargetID = ""
@@ -387,6 +393,12 @@ func (ap *ASDEXPane) cmdMapReposition(ctx *panes.Context) CommandStatus {
 	ap.mapRotate = nil
 	ap.dcbSpinner = nil
 	ap.dcbMenuCommand = nil
+	ap.tempAreaDraft = nil
+	ap.tempTextCommand = nil
+	ap.tempTextPlacement = nil
+	ap.tempDataSelectMode = TempDataSelectNone
+	ap.hoveredTempData = TempDataHit{Kind: TempDataHitNone, Index: -1}
+	ap.tempData.ClearHighlights()
 	ap.dcb.ReturnToMainMenu()
 	ap.datablockEdit = nil
 	ap.editingTargetID = ""
@@ -413,6 +425,12 @@ func (ap *ASDEXPane) cmdMapRotate(_ *panes.Context) CommandStatus {
 	ap.coastListReposition = nil
 	ap.dcbSpinner = nil
 	ap.dcbMenuCommand = nil
+	ap.tempAreaDraft = nil
+	ap.tempTextCommand = nil
+	ap.tempTextPlacement = nil
+	ap.tempDataSelectMode = TempDataSelectNone
+	ap.hoveredTempData = TempDataHit{Kind: TempDataHitNone, Index: -1}
+	ap.tempData.ClearHighlights()
 	ap.dcb.ReturnToMainMenu()
 	ap.datablockEdit = nil
 	ap.editingTargetID = ""
