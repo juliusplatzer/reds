@@ -90,6 +90,9 @@ func (ap *ASDEXPane) cmdRSlew(
 	ap.tempAreaDraft = nil
 	ap.tempTextCommand = nil
 	ap.tempTextPlacement = nil
+	ap.tempDataSelectMode = TempDataSelectNone
+	ap.hoveredTempData = TempDataHit{Kind: TempDataHitNone, Index: -1}
+	ap.tempData.ClearHighlights()
 	ap.dcb.ReturnToMainMenu()
 	ap.previewArea.SetSystemResponse("")
 	ap.clearHighlightedTarget()

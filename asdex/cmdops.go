@@ -85,6 +85,9 @@ func (ap *ASDEXPane) cmdTrackSuspend(_ *panes.Context) CommandStatus {
 	ap.tempAreaDraft = nil
 	ap.tempTextCommand = nil
 	ap.tempTextPlacement = nil
+	ap.tempDataSelectMode = TempDataSelectNone
+	ap.hoveredTempData = TempDataHit{Kind: TempDataHitNone, Index: -1}
+	ap.tempData.ClearHighlights()
 	ap.dcb.ReturnToMainMenu()
 	ap.clearHighlightedTarget()
 	ap.previewArea.SetSystemResponse("")
@@ -274,6 +277,9 @@ func (ap *ASDEXPane) cmdInitControl(_ *panes.Context) CommandStatus {
 	ap.tempAreaDraft = nil
 	ap.tempTextCommand = nil
 	ap.tempTextPlacement = nil
+	ap.tempDataSelectMode = TempDataSelectNone
+	ap.hoveredTempData = TempDataHit{Kind: TempDataHitNone, Index: -1}
+	ap.tempData.ClearHighlights()
 	ap.dcb.ReturnToMainMenu()
 	ap.datablockEdit = nil
 	ap.editingTargetID = ""
@@ -402,6 +408,9 @@ func (ap *ASDEXPane) cmdTerminateControl(_ *panes.Context) CommandStatus {
 	ap.tempAreaDraft = nil
 	ap.tempTextCommand = nil
 	ap.tempTextPlacement = nil
+	ap.tempDataSelectMode = TempDataSelectNone
+	ap.hoveredTempData = TempDataHit{Kind: TempDataHitNone, Index: -1}
+	ap.tempData.ClearHighlights()
 	ap.dcb.ReturnToMainMenu()
 	ap.datablockEdit = nil
 	ap.editingTargetID = ""

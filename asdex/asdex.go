@@ -105,6 +105,8 @@ type ASDEXPane struct {
 	tempAreaDraft             *TempAreaDraft
 	tempTextCommand           *TempTextCommand
 	tempTextPlacement         *TempTextPlacementCommand
+	tempDataSelectMode        TempDataSelectMode
+	hoveredTempData           TempDataHit
 	showCoastList             bool
 	hoveredCoastListTarget    string
 
@@ -286,13 +288,15 @@ func (p *ASDEXPane) Draw(ctx *panes.Context, zcb *renderer.ZCmdBuffer) {
 	p.coastList.SetVisible(p.showCoastList)
 	p.coastList.SetEntries(p.buildCoastSuspendEntries(now))
 	if p.mapReposition == nil && !p.listRepositionActive() && p.tempAreaDraft == nil &&
-		p.tempTextCommand == nil && p.tempTextPlacement == nil {
+		p.tempTextCommand == nil && p.tempTextPlacement == nil &&
+		p.tempDataSelectMode == TempDataSelectNone {
 		p.updateCoastListHover(ctx)
 	} else {
 		p.hoveredCoastListTarget = ""
 	}
 	if p.mapReposition == nil && p.tempAreaDraft == nil &&
-		p.tempTextCommand == nil && p.tempTextPlacement == nil {
+		p.tempTextCommand == nil && p.tempTextPlacement == nil &&
+		p.tempDataSelectMode == TempDataSelectNone {
 		p.updateRightClickGesture(ctx)
 	} else {
 		p.clearRightClickGesture()
@@ -326,6 +330,9 @@ func (p *ASDEXPane) Draw(ctx *panes.Context, zcb *renderer.ZCmdBuffer) {
 	} else if p.tempAreaDraft != nil {
 		p.clearHighlightedTarget()
 		p.consumeTempAreaDraftInput(ctx, transforms)
+	} else if p.tempDataSelectMode != TempDataSelectNone {
+		p.clearHighlightedTarget()
+		p.consumeTempDataSelectionInput(ctx, transforms)
 	} else if p.dcbSpinner != nil {
 		p.clearHighlightedTarget()
 		if !p.consumeDcbOnOffClick(ctx) && p.consumeDcbSpinnerInput(ctx) {
@@ -359,6 +366,11 @@ func (p *ASDEXPane) Draw(ctx *panes.Context, zcb *renderer.ZCmdBuffer) {
 				p.consumeCommandClicks(ctx, transforms)
 			}
 		}
+	}
+	if p.tempDataSelectMode != TempDataSelectNone && ctx.Mouse != nil {
+		p.hoveredTempData = p.tempData.HitTest(transforms.WorldFromWindowP(ctx.Mouse.Pos))
+	} else {
+		p.hoveredTempData = TempDataHit{Kind: TempDataHitNone, Index: -1}
 	}
 	p.applyCurrentCursor(ctx)
 	p.coastList.SetEntries(p.buildCoastSuspendEntries(now))
@@ -617,7 +629,8 @@ func (p *ASDEXPane) dcbCursorUnlocked() bool {
 	if p == nil {
 		return false
 	}
-	if p.tempAreaDraft != nil || p.tempTextCommand != nil || p.tempTextPlacement != nil {
+	if p.tempAreaDraft != nil || p.tempTextCommand != nil || p.tempTextPlacement != nil ||
+		p.tempDataSelectMode != TempDataSelectNone {
 		return false
 	}
 	if p.dcbSpinner != nil || p.dcbMenuCommand != nil {
@@ -748,6 +761,9 @@ func (p *ASDEXPane) activateDcbHit(_ *panes.Context, hit DcbHit) bool {
 		p.tempAreaDraft = nil
 		p.tempTextCommand = nil
 		p.tempTextPlacement = nil
+		p.tempDataSelectMode = TempDataSelectNone
+		p.hoveredTempData = TempDataHit{Kind: TempDataHitNone, Index: -1}
+		p.tempData.ClearHighlights()
 		p.previewArea.SetSystemResponse("")
 		p.clearHighlightedTarget()
 		return true
@@ -779,6 +795,9 @@ func (p *ASDEXPane) startRangeSpinner() {
 	p.tempAreaDraft = nil
 	p.tempTextCommand = nil
 	p.tempTextPlacement = nil
+	p.tempDataSelectMode = TempDataSelectNone
+	p.hoveredTempData = TempDataHit{Kind: TempDataHitNone, Index: -1}
+	p.tempData.ClearHighlights()
 	p.commandEntry.Clear()
 	p.dcbSpinner = NewRangeDcbSpinner(p.rangeSetting)
 	p.previewArea.SetSystemResponse("")
@@ -1000,6 +1019,12 @@ func (p *ASDEXPane) resolveCursorMode(ctx *panes.Context) CursorMode {
 	if p != nil && p.tempAreaDraft != nil {
 		return CursorModeScope
 	}
+	if p != nil && p.tempDataSelectMode != TempDataSelectNone {
+		if p.hoveredTempData.Kind != TempDataHitNone {
+			return CursorModeSelect
+		}
+		return CursorModeScope
+	}
 	if ctx != nil && ctx.Mouse != nil && ctx.Mouse.IsDown(platform.MouseButtonRight) {
 		return CursorModeHidden
 	}
@@ -1198,6 +1223,9 @@ func (p *ASDEXPane) cancelActiveCommand() {
 	p.tempAreaDraft = nil
 	p.tempTextCommand = nil
 	p.tempTextPlacement = nil
+	p.tempDataSelectMode = TempDataSelectNone
+	p.hoveredTempData = TempDataHit{Kind: TempDataHitNone, Index: -1}
+	p.tempData.ClearHighlights()
 	p.dcb.ReturnToMainMenu()
 	p.commandEntry.Clear()
 	p.previewArea.SetSystemResponse("")
@@ -1230,6 +1258,9 @@ func (p *ASDEXPane) consumeCommandKeyboard(ctx *panes.Context) bool {
 	}
 	if p.tempTextPlacement != nil {
 		return p.handleTempTextPlacementKeyboard(ctx)
+	}
+	if p.consumeTempDataSelectionKeyboard(ctx) {
+		return true
 	}
 	if p.dcbMenuCommand != nil {
 		return p.handleDcbMenuKeyboard(ctx)
@@ -1428,6 +1459,9 @@ func (p *ASDEXPane) startMultiPreviewReposition() {
 	p.tempAreaDraft = nil
 	p.tempTextCommand = nil
 	p.tempTextPlacement = nil
+	p.tempDataSelectMode = TempDataSelectNone
+	p.hoveredTempData = TempDataHit{Kind: TempDataHitNone, Index: -1}
+	p.tempData.ClearHighlights()
 	p.commandEntry.Clear()
 	p.previewArea.SetSystemResponse("")
 	p.clearHighlightedTarget()
@@ -1447,6 +1481,9 @@ func (p *ASDEXPane) startMultiCoastListReposition() {
 	p.tempAreaDraft = nil
 	p.tempTextCommand = nil
 	p.tempTextPlacement = nil
+	p.tempDataSelectMode = TempDataSelectNone
+	p.hoveredTempData = TempDataHit{Kind: TempDataHitNone, Index: -1}
+	p.tempData.ClearHighlights()
 	p.commandEntry.Clear()
 	p.previewArea.SetSystemResponse("")
 	p.clearHighlightedTarget()

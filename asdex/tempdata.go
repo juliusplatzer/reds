@@ -30,6 +30,8 @@ const (
 	tempTextLineSpacing       = 2
 	tempTextStepPx            = 15
 	tempTextZeroLengthPx      = 10
+
+	tempDataTextHoverRangeFeet float32 = 150.0
 )
 
 var (
@@ -80,6 +82,29 @@ const (
 	TempDataRestrictedArea
 )
 
+type TempDataSelectMode int
+
+const (
+	TempDataSelectNone TempDataSelectMode = iota
+	TempDataSelectDeleteGlobal
+	TempDataSelectHide
+)
+
+type TempDataHitKind int
+
+const (
+	TempDataHitNone TempDataHitKind = iota
+	TempDataHitText
+	TempDataHitClosedArea
+	TempDataHitRestrictedArea
+)
+
+type TempDataHit struct {
+	Kind  TempDataHitKind
+	Index int
+	ID    string
+}
+
 type TempData struct {
 	closedRunways map[string]bool
 
@@ -92,11 +117,13 @@ type TempData struct {
 }
 
 type TempArea struct {
-	ID       string
-	Type     TempDataType
-	Points   []redsmath.Vec2
-	Hidden   bool
-	Selected bool
+	ID     string
+	Type   TempDataType
+	Points []redsmath.Vec2
+	Bounds redsmath.Rect
+
+	Hidden      bool
+	Highlighted bool
 
 	meshVertices []renderer.PointVertex
 	meshIndices  []uint32
@@ -374,6 +401,7 @@ func (td *TempData) AddArea(kind TempDataType, points []redsmath.Vec2) {
 		ID:           td.nextTempAreaID(kind),
 		Type:         kind,
 		Points:       append([]redsmath.Vec2(nil), points...),
+		Bounds:       boundsForTempPolygon(points),
 		meshVertices: vertices,
 		meshIndices:  indices,
 	}
@@ -384,6 +412,33 @@ func (td *TempData) AddArea(kind TempDataType, points []redsmath.Vec2) {
 	case TempDataRestrictedArea:
 		td.restrictedAreas = append(td.restrictedAreas, area)
 	}
+}
+
+func boundsForTempPolygon(points []redsmath.Vec2) redsmath.Rect {
+	if len(points) == 0 {
+		return redsmath.Rect{}
+	}
+
+	minX := points[0].X
+	maxX := points[0].X
+	minY := points[0].Y
+	maxY := points[0].Y
+	for _, point := range points[1:] {
+		if point.X < minX {
+			minX = point.X
+		}
+		if point.X > maxX {
+			maxX = point.X
+		}
+		if point.Y < minY {
+			minY = point.Y
+		}
+		if point.Y > maxY {
+			maxY = point.Y
+		}
+	}
+
+	return redsmath.NewRect(minX, minY, maxX, maxY)
 }
 
 func (td *TempData) nextTempAreaID(kind TempDataType) string {
@@ -419,6 +474,173 @@ func (td *TempData) AddText(location redsmath.Vec2, line1 string, line2 string) 
 		Line2:    line2,
 	}
 	td.texts = append(td.texts, text)
+}
+
+func (td *TempData) HitTest(world redsmath.Vec2) TempDataHit {
+	if td == nil {
+		return TempDataHit{Kind: TempDataHitNone, Index: -1}
+	}
+	if hit := td.hitTestText(world); hit.Kind != TempDataHitNone {
+		return hit
+	}
+	if hit := td.hitTestAreas(world); hit.Kind != TempDataHitNone {
+		return hit
+	}
+	return TempDataHit{Kind: TempDataHitNone, Index: -1}
+}
+
+func (td *TempData) hitTestText(world redsmath.Vec2) TempDataHit {
+	if td == nil {
+		return TempDataHit{Kind: TempDataHitNone, Index: -1}
+	}
+
+	bestIndex := -1
+	bestDistance2 := tempDataTextHoverRangeFeet * tempDataTextHoverRangeFeet
+	for i := range td.texts {
+		text := &td.texts[i]
+		if text.Hidden {
+			continue
+		}
+
+		distance2 := tempDistance2(text.Location, world)
+		if distance2 <= bestDistance2 {
+			bestDistance2 = distance2
+			bestIndex = i
+		}
+	}
+
+	if bestIndex < 0 {
+		return TempDataHit{Kind: TempDataHitNone, Index: -1}
+	}
+	return TempDataHit{
+		Kind:  TempDataHitText,
+		Index: bestIndex,
+		ID:    td.texts[bestIndex].ID,
+	}
+}
+
+func (td *TempData) hitTestAreas(world redsmath.Vec2) TempDataHit {
+	if td == nil {
+		return TempDataHit{Kind: TempDataHitNone, Index: -1}
+	}
+
+	for i := len(td.closedAreas) - 1; i >= 0; i-- {
+		if tempAreaContains(td.closedAreas[i], world) {
+			return TempDataHit{
+				Kind:  TempDataHitClosedArea,
+				Index: i,
+				ID:    td.closedAreas[i].ID,
+			}
+		}
+	}
+	for i := len(td.restrictedAreas) - 1; i >= 0; i-- {
+		if tempAreaContains(td.restrictedAreas[i], world) {
+			return TempDataHit{
+				Kind:  TempDataHitRestrictedArea,
+				Index: i,
+				ID:    td.restrictedAreas[i].ID,
+			}
+		}
+	}
+	return TempDataHit{Kind: TempDataHitNone, Index: -1}
+}
+
+func tempAreaContains(area TempArea, world redsmath.Vec2) bool {
+	if area.Hidden || area.Bounds.Empty() {
+		return false
+	}
+	if world.X < area.Bounds.Min.X || world.X > area.Bounds.Max.X ||
+		world.Y < area.Bounds.Min.Y || world.Y > area.Bounds.Max.Y {
+		return false
+	}
+	return pointInPolygon(area.Points, world)
+}
+
+func tempDistance2(a, b redsmath.Vec2) float32 {
+	dx := a.X - b.X
+	dy := a.Y - b.Y
+	return dx*dx + dy*dy
+}
+
+func (td *TempData) ToggleHighlight(hit TempDataHit) bool {
+	if td == nil || hit.Index < 0 {
+		return false
+	}
+
+	switch hit.Kind {
+	case TempDataHitText:
+		if hit.Index >= len(td.texts) {
+			return false
+		}
+		td.texts[hit.Index].Highlighted = !td.texts[hit.Index].Highlighted
+		return true
+	case TempDataHitClosedArea:
+		if hit.Index >= len(td.closedAreas) {
+			return false
+		}
+		td.closedAreas[hit.Index].Highlighted = !td.closedAreas[hit.Index].Highlighted
+		return true
+	case TempDataHitRestrictedArea:
+		if hit.Index >= len(td.restrictedAreas) {
+			return false
+		}
+		td.restrictedAreas[hit.Index].Highlighted = !td.restrictedAreas[hit.Index].Highlighted
+		return true
+	default:
+		return false
+	}
+}
+
+func (td *TempData) DeleteHighlightedGlobal() {
+	if td == nil {
+		return
+	}
+
+	td.closedAreas = filterTempAreas(td.closedAreas, func(area TempArea) bool {
+		return !area.Highlighted
+	})
+	td.restrictedAreas = filterTempAreas(td.restrictedAreas, func(area TempArea) bool {
+		return !area.Highlighted
+	})
+	td.texts = filterTempTexts(td.texts, func(text TempText) bool {
+		return !text.Highlighted
+	})
+}
+
+func filterTempAreas(in []TempArea, keep func(TempArea) bool) []TempArea {
+	out := in[:0]
+	for _, area := range in {
+		if keep(area) {
+			out = append(out, area)
+		}
+	}
+	return out
+}
+
+func filterTempTexts(in []TempText, keep func(TempText) bool) []TempText {
+	out := in[:0]
+	for _, text := range in {
+		if keep(text) {
+			out = append(out, text)
+		}
+	}
+	return out
+}
+
+func (td *TempData) ClearHighlights() {
+	if td == nil {
+		return
+	}
+
+	for i := range td.closedAreas {
+		td.closedAreas[i].Highlighted = false
+	}
+	for i := range td.restrictedAreas {
+		td.restrictedAreas[i].Highlighted = false
+	}
+	for i := range td.texts {
+		td.texts[i].Highlighted = false
+	}
 }
 
 func (td *TempData) nextTempTextID() string {
@@ -490,26 +712,25 @@ func (td *TempData) drawAreas(
 		return
 	}
 
-	color := applyBrightness(rgb, brightness, brightnessFloorDefault)
-	lineBuilder := renderer.GetLinesBuilder()
 	for _, area := range areas {
 		if area.Hidden || len(area.Points) < 2 {
 			continue
 		}
 
+		color := tempAreaColor(area, rgb, brightness)
+		lineBuilder := renderer.GetLinesBuilder()
 		points := make([]renderer.PointVertex, 0, len(area.Points))
 		for _, pt := range area.Points {
 			points = append(points, renderer.PointVertex{X: pt.X, Y: pt.Y})
 		}
 		lineBuilder.AddLineStrip(points)
-	}
-	cb.SetRGB(color)
-	cb.LineWidth(1)
-	lineBuilder.GenerateCommands(cb)
-	renderer.ReturnLinesBuilder(lineBuilder)
 
-	for _, area := range areas {
-		if area.Hidden || len(area.meshVertices) == 0 || len(area.meshIndices) == 0 {
+		cb.SetRGB(color)
+		cb.LineWidth(1)
+		lineBuilder.GenerateCommands(cb)
+		renderer.ReturnLinesBuilder(lineBuilder)
+
+		if len(area.meshVertices) == 0 || len(area.meshIndices) == 0 {
 			continue
 		}
 
@@ -519,6 +740,13 @@ func (td *TempData) drawAreas(
 		triBuilder.GenerateCommands(cb, renderer.DrawHatched, tempAreaHatchOffset(area, transforms))
 		renderer.ReturnTrianglesBuilder(triBuilder)
 	}
+}
+
+func tempAreaColor(area TempArea, normal renderer.RGB, brightness int) renderer.RGB {
+	if area.Highlighted {
+		return applyBrightness(tempAreaHighlightRGB, brightness, brightnessFloorDefault)
+	}
+	return applyBrightness(normal, brightness, brightnessFloorDefault)
 }
 
 func tempAreaHatchOffset(area TempArea, transforms radar.ScopeTransformations) float32 {
@@ -539,9 +767,6 @@ func (td *TempData) DrawTempTextAnchors(
 		return
 	}
 
-	builder := renderer.GetLinesBuilder()
-	defer renderer.ReturnLinesBuilder(builder)
-
 	pixelsPerFoot := tempTextPixelsPerFoot(transforms)
 	if pixelsPerFoot <= 0 {
 		return
@@ -551,12 +776,14 @@ func (td *TempData) DrawTempTextAnchors(
 		if text.Hidden {
 			continue
 		}
+		builder := renderer.GetLinesBuilder()
 		addTempTextAnchor(builder, transforms.WindowFromWorldP(text.Location), pixelsPerFoot)
-	}
 
-	cb.SetRGB(applyBrightness(tempTextRGB, brightness, brightnessFloorDefault))
-	cb.LineWidth(1)
-	builder.GenerateCommands(cb)
+		cb.SetRGB(applyBrightness(tempTextColor(text), brightness, brightnessFloorDefault))
+		cb.LineWidth(1)
+		builder.GenerateCommands(cb)
+		renderer.ReturnLinesBuilder(builder)
+	}
 }
 
 func tempTextPixelsPerFoot(transforms radar.ScopeTransformations) float32 {
@@ -601,7 +828,6 @@ func (td *TempData) DrawTempTexts(
 		return
 	}
 
-	lineBuilder := renderer.GetLinesBuilder()
 	tdb := renderer.GetTextDrawBuilder()
 	tdb.SetFont(font)
 
@@ -611,16 +837,17 @@ func (td *TempData) DrawTempTexts(
 		}
 
 		color := applyBrightness(tempTextColor(text), tempTextBrightness(text), brightnessFloorDefault)
+		lineBuilder := renderer.GetLinesBuilder()
 		drawOneTempText(text, transforms, lineBuilder, tdb, font, fontSize, settings, color)
+		cb.SetRGB(color)
+		cb.LineWidth(1)
+		lineBuilder.GenerateCommands(cb)
+		renderer.ReturnLinesBuilder(lineBuilder)
 	}
 
-	cb.SetRGB(applyBrightness(tempTextRGB, tempTextBrightnessDefault, brightnessFloorDefault))
-	cb.LineWidth(1)
-	lineBuilder.GenerateCommands(cb)
 	tdb.GenerateCommands(cb, textureID)
 
 	renderer.ReturnTextDrawBuilder(tdb)
-	renderer.ReturnLinesBuilder(lineBuilder)
 }
 
 func tempTextColor(text TempText) renderer.RGB {
@@ -831,6 +1058,9 @@ func (p *ASDEXPane) activateTempDataDcbHit(hit DcbHit) bool {
 	case DcbFunctionDefineTempText:
 		p.startDefineTempText()
 		return true
+	case DcbFunctionDeleteGlobalTempData:
+		p.startDeleteGlobalTempData()
+		return true
 	case DcbFunctionCloseRunway:
 		if strings.TrimSpace(hit.Label) == "" {
 			return true
@@ -841,8 +1071,7 @@ func (p *ASDEXPane) activateTempDataDcbHit(hit DcbHit) bool {
 		return true
 	case DcbFunctionStoredGlobalTempData,
 		DcbFunctionShowHiddenTempData,
-		DcbFunctionHideTempData,
-		DcbFunctionDeleteGlobalTempData:
+		DcbFunctionHideTempData:
 		return true
 	default:
 		return false
@@ -870,6 +1099,88 @@ func (p *ASDEXPane) startDefineTempText() {
 	p.clearTempDataCommandConflicts()
 	p.tempTextCommand = NewTempTextCommand()
 	p.dcbMenuCommand = nil
+	p.previewArea.SetSystemResponse("")
+	p.clearHighlightedTarget()
+}
+
+func (p *ASDEXPane) startDeleteGlobalTempData() {
+	if p == nil {
+		return
+	}
+
+	p.clearTempDataCommandConflicts()
+	p.tempDataSelectMode = TempDataSelectDeleteGlobal
+	p.dcbMenuCommand = NewDcbMenuCommand("TEMP DATA", "DELETE GLOBAL")
+	p.previewArea.SetSystemResponse("")
+	p.clearHighlightedTarget()
+}
+
+func (p *ASDEXPane) consumeTempDataSelectionKeyboard(ctx *panes.Context) bool {
+	if p == nil || p.tempDataSelectMode == TempDataSelectNone ||
+		ctx == nil || ctx.Keyboard == nil {
+		return false
+	}
+
+	keyboard := ctx.Keyboard
+	if keyboard.WasPressed(platform.KeyEscape) ||
+		keyboard.WasPressed(platform.KeyBackspace) ||
+		keyboard.WasPressed(platform.KeyDelete) {
+		p.cancelTempDataSelection()
+		return true
+	}
+	return false
+}
+
+func (p *ASDEXPane) consumeTempDataSelectionInput(
+	ctx *panes.Context,
+	transforms radar.ScopeTransformations,
+) bool {
+	if p == nil || p.tempDataSelectMode == TempDataSelectNone ||
+		ctx == nil || ctx.Mouse == nil {
+		return false
+	}
+
+	mouse := ctx.Mouse
+	world := transforms.WorldFromWindowP(mouse.Pos)
+	switch {
+	case mouse.WasReleased(platform.MouseButtonLeft):
+		hit := p.tempData.HitTest(world)
+		if hit.Kind != TempDataHitNone {
+			p.tempData.ToggleHighlight(hit)
+			p.previewArea.SetSystemResponse("")
+		}
+		return true
+	case mouse.WasReleased(platform.MouseButtonMiddle):
+		switch p.tempDataSelectMode {
+		case TempDataSelectDeleteGlobal:
+			p.tempData.DeleteHighlightedGlobal()
+			p.finishTempDataSelection()
+			return true
+		case TempDataSelectHide:
+			return true
+		}
+	}
+	return false
+}
+
+func (p *ASDEXPane) cancelTempDataSelection() {
+	if p == nil {
+		return
+	}
+
+	p.tempData.ClearHighlights()
+	p.finishTempDataSelection()
+}
+
+func (p *ASDEXPane) finishTempDataSelection() {
+	if p == nil {
+		return
+	}
+
+	p.tempDataSelectMode = TempDataSelectNone
+	p.hoveredTempData = TempDataHit{Kind: TempDataHitNone, Index: -1}
+	p.dcb.SetMenu(DcbMenuTempData)
+	p.dcbMenuCommand = NewDcbMenuCommand("TEMP DATA")
 	p.previewArea.SetSystemResponse("")
 	p.clearHighlightedTarget()
 }
@@ -1236,6 +1547,9 @@ func (p *ASDEXPane) clearTempDataCommandConflicts() {
 	p.tempAreaDraft = nil
 	p.tempTextCommand = nil
 	p.tempTextPlacement = nil
+	p.tempDataSelectMode = TempDataSelectNone
+	p.hoveredTempData = TempDataHit{Kind: TempDataHitNone, Index: -1}
+	p.tempData.ClearHighlights()
 	p.dcbSpinner = nil
 	p.commandEntry.Clear()
 	p.datablockEdit = nil
@@ -1293,6 +1607,9 @@ func (p *ASDEXPane) closeDcbCurrentSubmenu() {
 	p.tempAreaDraft = nil
 	p.tempTextCommand = nil
 	p.tempTextPlacement = nil
+	p.tempDataSelectMode = TempDataSelectNone
+	p.hoveredTempData = TempDataHit{Kind: TempDataHitNone, Index: -1}
+	p.tempData.ClearHighlights()
 	p.dcbSpinner = nil
 	p.previewArea.SetSystemResponse("")
 	p.clearHighlightedTarget()
@@ -1311,6 +1628,9 @@ func (p *ASDEXPane) closeDcbSubmenu() {
 	p.tempAreaDraft = nil
 	p.tempTextCommand = nil
 	p.tempTextPlacement = nil
+	p.tempDataSelectMode = TempDataSelectNone
+	p.hoveredTempData = TempDataHit{Kind: TempDataHitNone, Index: -1}
+	p.tempData.ClearHighlights()
 	p.previewArea.SetSystemResponse("")
 	p.clearHighlightedTarget()
 }
