@@ -46,6 +46,7 @@ cp .env.example .env
 Finally, use
 
 ```bash
+chmod +x build.sh
 ./build.sh
 ```
 
