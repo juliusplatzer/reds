@@ -373,6 +373,13 @@ func (p *ASDEXPane) Draw(ctx *panes.Context, zcb *renderer.ZCmdBuffer) {
 	p.tempData.DrawClosedRunways(closedRunwayCB, &p.safetyLogic, closedRunwayBrightnessDefault)
 	closedRunwayCB.DisableScissor()
 
+	restrictedAreaCB := zcb.At(windowZ(0, zRestrictedArea))
+	restrictedAreaCB.Viewport(x, y, w, h)
+	restrictedAreaCB.Scissor(x, y, w, h)
+	transforms.LoadWorldViewingMatrices(restrictedAreaCB)
+	p.tempData.DrawRestrictedAreas(restrictedAreaCB, transforms, tempMapAreasBrightnessDefault)
+	restrictedAreaCB.DisableScissor()
+
 	closedAreaCB := zcb.At(windowZ(0, zClosedArea))
 	closedAreaCB.Viewport(x, y, w, h)
 	closedAreaCB.Scissor(x, y, w, h)

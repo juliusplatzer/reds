@@ -41,8 +41,10 @@ const (
 type TempData struct {
 	closedRunways map[string]bool
 
-	closedAreas []TempArea
-	nextAreaID  int
+	closedAreas     []TempArea
+	restrictedAreas []TempArea
+
+	nextAreaID int
 }
 
 type TempArea struct {
@@ -124,6 +126,11 @@ func (td *TempData) VisibleObjectCount() int {
 			count++
 		}
 	}
+	for _, area := range td.restrictedAreas {
+		if !area.Hidden {
+			count++
+		}
+	}
 	return count
 }
 
@@ -148,6 +155,8 @@ func (td *TempData) AddArea(kind TempDataType, points []redsmath.Vec2) {
 	switch kind {
 	case TempDataClosedArea:
 		td.closedAreas = append(td.closedAreas, area)
+	case TempDataRestrictedArea:
+		td.restrictedAreas = append(td.restrictedAreas, area)
 	}
 }
 
@@ -195,14 +204,39 @@ func (td *TempData) DrawClosedAreas(
 	transforms radar.ScopeTransformations,
 	brightness int,
 ) {
-	if td == nil || cb == nil || len(td.closedAreas) == 0 {
+	if td == nil {
 		return
 	}
 
-	color := applyBrightness(tempClosedAreaRGB, brightness, brightnessFloorDefault)
+	td.drawAreas(cb, transforms, td.closedAreas, tempClosedAreaRGB, brightness)
+}
 
+func (td *TempData) DrawRestrictedAreas(
+	cb *renderer.CmdBuffer,
+	transforms radar.ScopeTransformations,
+	brightness int,
+) {
+	if td == nil {
+		return
+	}
+
+	td.drawAreas(cb, transforms, td.restrictedAreas, tempRestrictedAreaRGB, brightness)
+}
+
+func (td *TempData) drawAreas(
+	cb *renderer.CmdBuffer,
+	transforms radar.ScopeTransformations,
+	areas []TempArea,
+	rgb renderer.RGB,
+	brightness int,
+) {
+	if td == nil || cb == nil || len(areas) == 0 {
+		return
+	}
+
+	color := applyBrightness(rgb, brightness, brightnessFloorDefault)
 	lineBuilder := renderer.GetLinesBuilder()
-	for _, area := range td.closedAreas {
+	for _, area := range areas {
 		if area.Hidden || len(area.Points) < 2 {
 			continue
 		}
@@ -218,7 +252,7 @@ func (td *TempData) DrawClosedAreas(
 	lineBuilder.GenerateCommands(cb)
 	renderer.ReturnLinesBuilder(lineBuilder)
 
-	for _, area := range td.closedAreas {
+	for _, area := range areas {
 		if area.Hidden || len(area.meshVertices) == 0 || len(area.meshIndices) == 0 {
 			continue
 		}
@@ -343,6 +377,9 @@ func (p *ASDEXPane) activateTempDataDcbHit(hit DcbHit) bool {
 	case DcbFunctionDefineClosedArea:
 		p.startDefineClosedArea()
 		return true
+	case DcbFunctionDefineRestrictedArea:
+		p.startDefineRestrictedArea()
+		return true
 	case DcbFunctionCloseRunway:
 		if strings.TrimSpace(hit.Label) == "" {
 			return true
@@ -352,7 +389,6 @@ func (p *ASDEXPane) activateTempDataDcbHit(hit DcbHit) bool {
 		p.clearHighlightedTarget()
 		return true
 	case DcbFunctionStoredGlobalTempData,
-		DcbFunctionDefineRestrictedArea,
 		DcbFunctionDefineTempText,
 		DcbFunctionShowHiddenTempData,
 		DcbFunctionHideTempData,
@@ -364,6 +400,14 @@ func (p *ASDEXPane) activateTempDataDcbHit(hit DcbHit) bool {
 }
 
 func (p *ASDEXPane) startDefineClosedArea() {
+	p.startDefineTempArea(TempDataClosedArea, "DEFINE CLOSED AREA")
+}
+
+func (p *ASDEXPane) startDefineRestrictedArea() {
+	p.startDefineTempArea(TempDataRestrictedArea, "DEFINE RESTR AREA")
+}
+
+func (p *ASDEXPane) startDefineTempArea(kind TempDataType, commandLine string) {
 	if p == nil {
 		return
 	}
@@ -374,9 +418,9 @@ func (p *ASDEXPane) startDefineClosedArea() {
 	}
 
 	p.clearTempDataCommandConflicts()
-	p.dcbMenuCommand = NewDcbMenuCommand("TEMP DATA", "DEFINE CLOSED AREA")
+	p.dcbMenuCommand = NewDcbMenuCommand("TEMP DATA", commandLine)
 	p.tempAreaDraft = &TempAreaDraft{
-		Type:   TempDataClosedArea,
+		Type:   kind,
 		Points: make([]redsmath.Vec2, 0, maxTempAreaNodes+1),
 	}
 	p.previewArea.SetSystemResponse("")
@@ -458,9 +502,9 @@ func (p *ASDEXPane) finishTempAreaDraft() {
 		return
 	}
 
-	closed := append([]redsmath.Vec2(nil), draft.Points...)
-	closed = append(closed, first)
-	p.tempData.AddArea(draft.Type, closed)
+	polygon := append([]redsmath.Vec2(nil), draft.Points...)
+	polygon = append(polygon, first)
+	p.tempData.AddArea(draft.Type, polygon)
 
 	p.tempAreaDraft = nil
 	p.dcb.SetMenu(DcbMenuTempData)
