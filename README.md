@@ -2,7 +2,7 @@ The **Radar Emulation Display System** (REDS) is a high-fidelity emulation of [A
 
 ### Installation
 
-If you do not have a SWIFT Portal account yet, register [here](https://portal.swim.faa.gov/). Once logged in navigate to `Subscriptions` and create a `New Subscription` with the following properties:
+If you do not have a SWIFT Portal account yet, register [here](https://portal.swim.faa.gov/). Once logged in, navigate to `Subscriptions` and create a `New Subscription` with the following properties:
 
 | Property | Value |
 | --- | --- |
@@ -13,7 +13,7 @@ If you do not have a SWIFT Portal account yet, register [here](https://portal.sw
 #### Requirements
 
 * Go 1.25 or compatible
-* JDK 21
+* JDK 21 or newer
 * Maven
 * C/C++ toolchain with cgo support
 * `pkg-config` and GLFW
@@ -28,14 +28,16 @@ xcode-select --install
 brew install go openjdk@21 maven pkg-config glfw
 ```
 
-If Homebrew's JDK 21 is not already first on your `PATH`, configure it for the current shell:
+If your default `java` or `mvn` uses a JDK **older** than 21, point the current shell at brew's JDK 21:
 
 ```bash
+# check whether JDK 21 or newer is used
+# java -version
 export JAVA_HOME="$(brew --prefix openjdk@21)/libexec/openjdk.jdk/Contents/Home"
 export PATH="$JAVA_HOME/bin:$PATH"
 ```
 
-Fill in your SWIM credentials into the example environment file and run
+Fill in your SWIM credentials unquoted into the example environment file and run
 
 ```bash
 cp .env.example .env
