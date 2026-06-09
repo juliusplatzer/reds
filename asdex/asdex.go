@@ -82,6 +82,7 @@ type ASDEXPane struct {
 	mode              Mode
 	videomap          *VideoMap
 	safetyLogic       SafetyLogic
+	tempData          TempData
 	targets           TargetStore
 	smes              *redsnet.SmesClient
 	fonts             fontCache
@@ -174,6 +175,7 @@ func NewPane(airport string) (*ASDEXPane, error) {
 		mode:              ModeDay,
 		videomap:          vm,
 		safetyLogic:       safetyLogic,
+		tempData:          NewTempData(),
 		targets:           NewTargetStore(),
 		smes:              client,
 		fonts:             fonts,
@@ -360,7 +362,7 @@ func (p *ASDEXPane) Draw(ctx *panes.Context, zcb *renderer.ZCmdBuffer) {
 	closedRunwayCB.Viewport(x, y, w, h)
 	closedRunwayCB.Scissor(x, y, w, h)
 	transforms.LoadWorldViewingMatrices(closedRunwayCB)
-	p.safetyLogic.DrawClosedRunways(closedRunwayCB, closedRunwayBrightnessDefault)
+	p.tempData.DrawClosedRunways(closedRunwayCB, &p.safetyLogic, closedRunwayBrightnessDefault)
 	closedRunwayCB.DisableScissor()
 
 	holdBarCB := zcb.At(windowZ(0, zSafetyLogicHoldBars))
@@ -612,7 +614,7 @@ func (p *ASDEXPane) dcbState() DcbState {
 		LeaderLength:          settings.LeaderLength,
 		DataBlocksOn:          settings.ShowDataBlocks,
 		DcbOn:                 p.dcb.On(),
-		ClosedRunways:         p.safetyLogic.DcbRunwayClosureStates(),
+		ClosedRunways:         p.tempData.DcbRunwayClosureStates(&p.safetyLogic),
 		ActiveSpinnerFunction: activeSpinnerFunction,
 	}
 }
@@ -672,36 +674,15 @@ func (p *ASDEXPane) activateDcbHit(_ *panes.Context, hit DcbHit) bool {
 		return false
 	}
 
+	if p.activateTempDataDcbHit(hit) {
+		return true
+	}
+
 	switch hit.Function {
 	case DcbFunctionRange:
 		if p.dcb.On() {
 			p.startRangeSpinner()
 		}
-		return true
-	case DcbFunctionTempData:
-		p.openTempDataDcbMenu()
-		return true
-	case DcbFunctionDone:
-		p.closeDcbCurrentSubmenu()
-		return true
-	case DcbFunctionClosedRunway:
-		p.openTempDataClosedRunwayDcbMenu()
-		return true
-	case DcbFunctionCloseRunway:
-		if strings.TrimSpace(hit.Label) == "" {
-			return true
-		}
-		p.safetyLogic.ToggleRunwayClosedByDcbIndex(hit.ConfigID)
-		p.previewArea.SetSystemResponse("")
-		p.clearHighlightedTarget()
-		return true
-	case DcbFunctionStoredGlobalTempData,
-		DcbFunctionDefineClosedArea,
-		DcbFunctionDefineRestrictedArea,
-		DcbFunctionDefineTempText,
-		DcbFunctionShowHiddenTempData,
-		DcbFunctionHideTempData,
-		DcbFunctionDeleteGlobalTempData:
 		return true
 	case DcbFunctionDcbOnOff:
 		p.dcb.ToggleOnOff()
@@ -737,86 +718,6 @@ func (p *ASDEXPane) startRangeSpinner() {
 	p.dcbMenuCommand = nil
 	p.commandEntry.Clear()
 	p.dcbSpinner = NewRangeDcbSpinner(p.rangeSetting)
-	p.previewArea.SetSystemResponse("")
-	p.clearHighlightedTarget()
-}
-
-func (p *ASDEXPane) openTempDataDcbMenu() {
-	if p == nil {
-		return
-	}
-
-	p.dcb.SetMenu(DcbMenuTempData)
-	p.dcbSpinner = nil
-	p.commandEntry.Clear()
-	p.datablockEdit = nil
-	p.editingTargetID = ""
-	p.initControlEntry = nil
-	p.termControlEntry = nil
-	p.multiFunction = nil
-	p.previewReposition = nil
-	p.coastListReposition = nil
-	p.mapReposition = nil
-	p.mapRotate = nil
-	p.dcbMenuCommand = NewDcbMenuCommand("TEMP DATA")
-	p.previewArea.SetSystemResponse("")
-	p.clearHighlightedTarget()
-}
-
-func (p *ASDEXPane) openTempDataClosedRunwayDcbMenu() {
-	if p == nil {
-		return
-	}
-
-	p.dcb.SetMenu(DcbMenuClosedRunway)
-	p.dcbSpinner = nil
-	p.commandEntry.Clear()
-	p.datablockEdit = nil
-	p.editingTargetID = ""
-	p.initControlEntry = nil
-	p.termControlEntry = nil
-	p.multiFunction = nil
-	p.previewReposition = nil
-	p.coastListReposition = nil
-	p.mapReposition = nil
-	p.mapRotate = nil
-	p.dcbMenuCommand = NewDcbMenuCommand("TEMP DATA", "CLOSED RUNWAY")
-	p.previewArea.SetSystemResponse("")
-	p.clearHighlightedTarget()
-}
-
-func (p *ASDEXPane) closeDcbCurrentSubmenu() {
-	if p == nil {
-		return
-	}
-
-	switch p.dcb.Menu() {
-	case DcbMenuClosedRunway:
-		p.dcb.SetMenu(DcbMenuTempData)
-		p.dcbMenuCommand = NewDcbMenuCommand("TEMP DATA")
-	case DcbMenuTempData:
-		p.dcb.SetMenu(DcbMenuMain)
-		p.dcbMenuCommand = nil
-	default:
-		p.closeDcbSubmenu()
-		return
-	}
-
-	p.dcbSpinner = nil
-	p.previewArea.SetSystemResponse("")
-	p.clearHighlightedTarget()
-}
-
-func (p *ASDEXPane) closeDcbSubmenu() {
-	if p == nil {
-		return
-	}
-
-	if p.dcb.Menu() != DcbMenuOff {
-		p.dcb.SetMenu(DcbMenuMain)
-	}
-	p.dcbMenuCommand = nil
-	p.dcbSpinner = nil
 	p.previewArea.SetSystemResponse("")
 	p.clearHighlightedTarget()
 }
@@ -1255,22 +1156,6 @@ func (p *ASDEXPane) consumeCommandKeyboard(ctx *panes.Context) bool {
 	if p.commandMode == CommandModeNone {
 		return p.handleNormalCommandKeyboard(ctx)
 	}
-	return false
-}
-
-func (p *ASDEXPane) handleDcbMenuKeyboard(ctx *panes.Context) bool {
-	if p == nil || p.dcbMenuCommand == nil || ctx == nil || ctx.Keyboard == nil {
-		return false
-	}
-
-	keyboard := ctx.Keyboard
-	if keyboard.WasPressed(platform.KeyEscape) ||
-		keyboard.WasPressed(platform.KeyBackspace) ||
-		keyboard.WasPressed(platform.KeyDelete) {
-		p.closeDcbCurrentSubmenu()
-		return true
-	}
-
 	return false
 }
 
