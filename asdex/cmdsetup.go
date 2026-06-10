@@ -94,12 +94,14 @@ func (command *CoastListRepositionCommand) DisplayLines() []string {
 }
 
 type MapRepositionCommand struct {
+	WindowID       ScopeWindowID
 	originalCenter redsmath.Vec2
 	initialized    bool
 }
 
-func NewMapRepositionCommand(center redsmath.Vec2) *MapRepositionCommand {
+func NewMapRepositionCommand(windowID ScopeWindowID, center redsmath.Vec2) *MapRepositionCommand {
 	return &MapRepositionCommand{
+		WindowID:       windowID,
 		originalCenter: center,
 		initialized:    true,
 	}
@@ -113,13 +115,15 @@ func (command *MapRepositionCommand) DisplayLines() []string {
 }
 
 type MapRotateCommand struct {
+	WindowID         ScopeWindowID
 	value            string
 	cursor           int
 	originalRotation float32
 }
 
-func NewMapRotateCommand(rotation float32) *MapRotateCommand {
+func NewMapRotateCommand(windowID ScopeWindowID, rotation float32) *MapRotateCommand {
 	return &MapRotateCommand{
+		WindowID:         windowID,
 		originalRotation: rotation,
 	}
 }
@@ -349,9 +353,9 @@ func (ap *ASDEXPane) cmdDataBlocksOnOff(_ *panes.Context) CommandStatus {
 	}
 
 	windowID := ap.activeWindowID()
-	settings := ap.dataBlockSettingsForWindow(windowID)
-	settings.ShowDataBlocks = !settings.ShowDataBlocks
-	ap.setDataBlockSettingsForWindow(windowID, settings)
+	ap.updateActiveDataBlockSettings(func(settings *DataBlockSettings) {
+		settings.ShowDataBlocks = !settings.ShowDataBlocks
+	})
 	ap.clearTargetShowDBOverrides(windowID)
 
 	return CommandStatus{
@@ -437,8 +441,10 @@ func (ap *ASDEXPane) cmdMapReposition(ctx *panes.Context) CommandStatus {
 		return CommandStatus{Clear: ClearAll}
 	}
 
+	windowID := ap.activeWindowID()
+	view := ap.activeScopeView()
 	ap.commandMode = CommandModeMapReposition
-	ap.mapReposition = NewMapRepositionCommand(ap.center)
+	ap.mapReposition = NewMapRepositionCommand(windowID, view.Center)
 	ap.multiFunction = nil
 	ap.previewReposition = nil
 	ap.coastListReposition = nil
@@ -470,8 +476,10 @@ func (ap *ASDEXPane) cmdMapRotate(_ *panes.Context) CommandStatus {
 		return CommandStatus{Clear: ClearAll}
 	}
 
+	windowID := ap.activeWindowID()
+	view := ap.activeScopeView()
 	ap.commandMode = CommandModeMapRotate
-	ap.mapRotate = NewMapRotateCommand(ap.rotation)
+	ap.mapRotate = NewMapRotateCommand(windowID, view.Rotation)
 	ap.mapReposition = nil
 	ap.multiFunction = nil
 	ap.previewReposition = nil
@@ -593,9 +601,9 @@ func (ap *ASDEXPane) cmdLeaderDirectionAll(
 	}
 
 	windowID := ap.activeWindowID()
-	settings := ap.dataBlockSettingsForWindow(windowID)
-	settings.LeaderDirection = input.Direction
-	ap.setDataBlockSettingsForWindow(windowID, settings)
+	ap.updateActiveDataBlockSettings(func(settings *DataBlockSettings) {
+		settings.LeaderDirection = input.Direction
+	})
 	ap.clearLeaderDirectionOverrides(windowID)
 
 	return CommandStatus{
@@ -641,9 +649,9 @@ func (ap *ASDEXPane) cmdLeaderLengthAll(
 	}
 
 	windowID := ap.activeWindowID()
-	settings := ap.dataBlockSettingsForWindow(windowID)
-	settings.LeaderLength = input.Value
-	ap.setDataBlockSettingsForWindow(windowID, settings)
+	ap.updateActiveDataBlockSettings(func(settings *DataBlockSettings) {
+		settings.LeaderLength = input.Value
+	})
 	ap.clearLeaderLengthOverrides(windowID)
 
 	return CommandStatus{

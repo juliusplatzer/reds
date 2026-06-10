@@ -182,6 +182,90 @@ func (p *ASDEXPane) setScopeView(id ScopeWindowID, view ScopeView) {
 	}
 }
 
+func (p *ASDEXPane) scopeViewForWindow(id ScopeWindowID) (ScopeView, bool) {
+	if p == nil {
+		return ScopeView{}, false
+	}
+
+	if id == mainScopeWindowID {
+		return p.mainScopeView(), true
+	}
+
+	for _, win := range p.windows.secondary {
+		if !win.Hidden && win.ID == id {
+			return win.View, true
+		}
+	}
+	return ScopeView{}, false
+}
+
+func (p *ASDEXPane) scopeWindowRectForWindow(
+	id ScopeWindowID,
+	paneSize redsmath.Vec2,
+) (redsmath.Rect, bool) {
+	if p == nil {
+		return redsmath.Rect{}, false
+	}
+
+	if id == mainScopeWindowID {
+		return redsmath.RectFromSize(paneSize.X, paneSize.Y), true
+	}
+
+	for _, win := range p.windows.secondary {
+		if !win.Hidden && win.ID == id {
+			return win.Rect, true
+		}
+	}
+	return redsmath.Rect{}, false
+}
+
+func (p *ASDEXPane) updateScopeViewForWindow(
+	id ScopeWindowID,
+	update func(*ScopeView),
+) bool {
+	if p == nil || update == nil {
+		return false
+	}
+
+	if id == mainScopeWindowID {
+		view := p.mainScopeView()
+		update(&view)
+		p.applyMainScopeView(view)
+		return true
+	}
+
+	for i := range p.windows.secondary {
+		if p.windows.secondary[i].Hidden || p.windows.secondary[i].ID != id {
+			continue
+		}
+
+		view := p.windows.secondary[i].View
+		update(&view)
+		p.windows.secondary[i].View = view
+		return true
+	}
+	return false
+}
+
+func (p *ASDEXPane) activeScopeView() ScopeView {
+	if p == nil {
+		return ScopeView{}
+	}
+
+	view, ok := p.scopeViewForWindow(p.activeWindowID())
+	if !ok {
+		return p.mainScopeView()
+	}
+	return view
+}
+
+func (p *ASDEXPane) updateActiveScopeView(update func(*ScopeView)) bool {
+	if p == nil {
+		return false
+	}
+	return p.updateScopeViewForWindow(p.activeWindowID(), update)
+}
+
 func (p *ASDEXPane) scopeWindowAtPoint(
 	point redsmath.Vec2,
 	paneSize redsmath.Vec2,

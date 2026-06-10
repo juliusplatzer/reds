@@ -319,11 +319,9 @@ func (p *ASDEXPane) Draw(ctx *panes.Context, zcb *renderer.ZCmdBuffer) {
 	if p.mapReposition != nil {
 		p.clearHighlightedTarget()
 		if p.consumeMapRepositionMouse(ctx, transforms) {
-			transforms = radar.GetScopeTransformations(
-				paneExtent,
-				p.center,
-				p.rangeFeet,
-				p.rotation,
+			transforms = scopeTransformForWindow(
+				redsmath.RectFromSize(ctx.PaneSize().X, ctx.PaneSize().Y),
+				p.mainScopeView(),
 			)
 		}
 	} else if p.listRepositionActive() {
@@ -350,11 +348,9 @@ func (p *ASDEXPane) Draw(ctx *panes.Context, zcb *renderer.ZCmdBuffer) {
 	} else if p.dcbSpinner != nil {
 		p.clearHighlightedTarget()
 		if !p.consumeDcbOnOffClick(ctx) && p.consumeDcbSpinnerInput(ctx) {
-			transforms = radar.GetScopeTransformations(
-				paneExtent,
-				p.center,
-				p.rangeFeet,
-				p.rotation,
+			transforms = scopeTransformForWindow(
+				redsmath.RectFromSize(ctx.PaneSize().X, ctx.PaneSize().Y),
+				p.mainScopeView(),
 			)
 		}
 	} else if p.dcbMenuCommand != nil {
@@ -542,7 +538,7 @@ func (p *ASDEXPane) renderScopeWindow(
 		func(size int) renderer.TextureID {
 			return p.fonts.textureForSize(ctx.Renderer, size)
 		},
-		p.dataBlockSettings(),
+		p.dataBlockSettingsForWindow(windowID),
 	)
 	tempTextCB.DisableScissor()
 
@@ -735,24 +731,25 @@ func (p *ASDEXPane) dcbState() DcbState {
 		}
 	}
 
-	rangeSetting := asdexDefaultRangeSetting
-	if p.rangeSetting != 0 {
-		rangeSetting = clampInt(p.rangeSetting, asdexMinRangeSetting, asdexMaxRangeSetting)
+	active := p.activeDcbWindowState()
+	rangeSetting := active.View.RangeSetting
+	if rangeSetting == 0 {
+		rangeSetting = asdexDefaultRangeSetting
 	}
+	rangeSetting = clampInt(rangeSetting, asdexMinRangeSetting, asdexMaxRangeSetting)
 
 	activeSpinnerFunction := DcbFunctionVacant
 	if p.dcbSpinner != nil {
 		activeSpinnerFunction = p.dcbSpinner.Function
 	}
 
-	settings := p.dataBlockSettings()
 	return DcbState{
 		Range:                 rangeSetting,
 		Mode:                  p.mode,
 		VectorOn:              true,
 		VectorLength:          3,
-		LeaderLength:          settings.LeaderLength,
-		DataBlocksOn:          settings.ShowDataBlocks,
+		LeaderLength:          active.DB.LeaderLength,
+		DataBlocksOn:          active.DB.ShowDataBlocks,
 		DcbOn:                 p.dcb.On(),
 		ClosedRunways:         p.tempData.DcbRunwayClosureStates(&p.safetyLogic),
 		ActiveSpinnerFunction: activeSpinnerFunction,
@@ -848,9 +845,8 @@ func (p *ASDEXPane) startRangeSpinner() {
 		return
 	}
 
-	if p.rangeSetting == 0 {
-		p.setRangeSetting(asdexDefaultRangeSetting)
-	}
+	windowID := p.activeWindowID()
+	currentRange := p.activeRangeSetting()
 
 	p.commandMode = CommandModeNone
 	p.datablockEdit = nil
@@ -871,7 +867,7 @@ func (p *ASDEXPane) startRangeSpinner() {
 	p.tempData.ClearHighlights()
 	p.newWindow = nil
 	p.commandEntry.Clear()
-	p.dcbSpinner = NewRangeDcbSpinner(p.rangeSetting)
+	p.dcbSpinner = NewRangeDcbSpinner(windowID, currentRange)
 	p.previewArea.SetSystemResponse("")
 	p.clearHighlightedTarget()
 }
@@ -932,7 +928,7 @@ func (p *ASDEXPane) commitDcbSpinner() {
 			return
 		}
 
-		p.setRangeSetting(value)
+		p.setRangeSettingForWindow(spinner.WindowID, value)
 		p.dcbSpinner = nil
 		p.previewArea.SetSystemResponse("")
 		return
@@ -950,24 +946,100 @@ func (p *ASDEXPane) incrementActiveDcbSpinner(delta int) {
 
 	switch p.dcbSpinner.Kind {
 	case DcbSpinnerRange:
-		p.setRangeSetting(p.rangeSetting + delta)
-		p.dcbSpinner.Value = p.rangeSetting
+		windowID := p.dcbSpinner.WindowID
+		view, ok := p.scopeViewForWindow(windowID)
+		if !ok {
+			windowID = p.activeWindowID()
+			view = p.activeScopeView()
+			p.dcbSpinner.WindowID = windowID
+		}
+
+		next := view.RangeSetting
+		if next == 0 {
+			next = asdexDefaultRangeSetting
+		}
+		next = clampInt(
+			next+delta,
+			asdexMinRangeSetting,
+			asdexMaxRangeSetting,
+		)
+
+		p.setRangeSettingForWindow(windowID, next)
+		p.dcbSpinner.Value = next
 	default:
 		p.dcbSpinner.Increment(delta)
 	}
 	p.previewArea.SetSystemResponse("")
 }
 
-func (p *ASDEXPane) setRangeSetting(rangeSetting int) {
+func (p *ASDEXPane) activeRangeSetting() int {
+	view := p.activeScopeView()
+	if view.RangeSetting == 0 {
+		return asdexDefaultRangeSetting
+	}
+	return clampInt(view.RangeSetting, asdexMinRangeSetting, asdexMaxRangeSetting)
+}
+
+func (p *ASDEXPane) setRangeSettingForWindow(id ScopeWindowID, rangeSetting int) {
 	if p == nil {
 		return
 	}
-	p.rangeSetting = clampInt(rangeSetting, asdexMinRangeSetting, asdexMaxRangeSetting)
-	p.rangeFeet = rangeFeetFromSetting(p.rangeSetting)
+
+	rangeSetting = clampInt(rangeSetting, asdexMinRangeSetting, asdexMaxRangeSetting)
+	p.updateScopeViewForWindow(id, func(view *ScopeView) {
+		view.RangeSetting = rangeSetting
+		view.RangeFeet = rangeFeetFromSetting(rangeSetting)
+	})
+}
+
+func (p *ASDEXPane) setMainRangeSetting(rangeSetting int) {
+	p.setRangeSettingForWindow(mainScopeWindowID, rangeSetting)
+}
+
+func (p *ASDEXPane) setActiveRangeSetting(rangeSetting int) {
+	if p == nil {
+		return
+	}
+	p.setRangeSettingForWindow(p.activeWindowID(), rangeSetting)
 }
 
 func (p *ASDEXPane) dataBlockSettings() DataBlockSettings {
 	return p.dataBlockSettingsForWindow(p.activeWindowID())
+}
+
+type ActiveDcbWindowState struct {
+	WindowID ScopeWindowID
+	View     ScopeView
+	DB       DataBlockSettings
+}
+
+func (p *ASDEXPane) activeDcbWindowState() ActiveDcbWindowState {
+	windowID := p.activeWindowID()
+
+	view, ok := p.scopeViewForWindow(windowID)
+	if !ok {
+		windowID = mainScopeWindowID
+		view = p.mainScopeView()
+	}
+
+	return ActiveDcbWindowState{
+		WindowID: windowID,
+		View:     view,
+		DB:       p.dataBlockSettingsForWindow(windowID),
+	}
+}
+
+func (p *ASDEXPane) updateActiveDataBlockSettings(
+	update func(*DataBlockSettings),
+) {
+	if p == nil || update == nil {
+		return
+	}
+
+	windowID := p.activeWindowID()
+	settings := p.dataBlockSettingsForWindow(windowID)
+	update(&settings)
+	p.setDataBlockSettingsForWindow(windowID, settings)
 }
 
 func (p *ASDEXPane) activeWindowID() ScopeWindowID {
@@ -1469,10 +1541,18 @@ func (p *ASDEXPane) cancelActiveCommand() {
 		return
 	}
 	if p.mapReposition != nil && p.mapReposition.initialized {
-		p.center = p.mapReposition.originalCenter
+		windowID := p.mapReposition.WindowID
+		originalCenter := p.mapReposition.originalCenter
+		p.updateScopeViewForWindow(windowID, func(view *ScopeView) {
+			view.Center = originalCenter
+		})
 	}
 	if p.mapRotate != nil {
-		p.rotation = p.mapRotate.originalRotation
+		windowID := p.mapRotate.WindowID
+		originalRotation := p.mapRotate.originalRotation
+		p.updateScopeViewForWindow(windowID, func(view *ScopeView) {
+			view.Rotation = originalRotation
+		})
 	}
 	p.commandMode = CommandModeNone
 	p.datablockEdit = nil
@@ -1810,7 +1890,11 @@ func (p *ASDEXPane) submitMapRotate() {
 		return
 	}
 
-	p.rotation = normalizeRotation(float32(value))
+	windowID := p.mapRotate.WindowID
+	rotation := normalizeRotation(float32(value))
+	p.updateScopeViewForWindow(windowID, func(view *ScopeView) {
+		view.Rotation = rotation
+	})
 	p.applyCommandStatus(CommandStatus{
 		Clear:     ClearAll,
 		Output:    "",
@@ -1941,15 +2025,12 @@ func (p *ASDEXPane) listRepositionActive() bool {
 	return p != nil && (p.previewReposition != nil || p.coastListReposition != nil)
 }
 
-func mapRepositionCursorCenter(ctx *panes.Context) redsmath.Vec2 {
-	if ctx == nil {
-		return redsmath.Vec2{}
-	}
-	size := ctx.PaneSize()
-	return redsmath.Vec2{
+func mapRepositionCursorCenter(rect redsmath.Rect) redsmath.Vec2 {
+	size := rect.Size()
+	return rect.Min.Add(redsmath.Vec2{
 		X: size.X * 0.5,
 		Y: size.Y * 0.5,
-	}
+	})
 }
 
 func (p *ASDEXPane) centerMapRepositionCursor(ctx *panes.Context) {
@@ -1957,7 +2038,11 @@ func (p *ASDEXPane) centerMapRepositionCursor(ctx *panes.Context) {
 		return
 	}
 
-	center := mapRepositionCursorCenter(ctx)
+	rect, ok := p.scopeWindowRectForWindow(p.mapReposition.WindowID, ctx.PaneSize())
+	if !ok {
+		rect = redsmath.RectFromSize(ctx.PaneSize().X, ctx.PaneSize().Y)
+	}
+	center := mapRepositionCursorCenter(rect)
 	ctx.Platform.SetMousePosition(ctx.PaneRect.Min.Add(center))
 	if ctx.Mouse != nil {
 		ctx.Mouse.Pos = center
@@ -1983,14 +2068,27 @@ func (p *ASDEXPane) consumeMapRepositionMouse(
 		return true
 	}
 
-	center := mapRepositionCursorCenter(ctx)
+	windowID := p.mapReposition.WindowID
+	rect, ok := p.scopeWindowRectForWindow(windowID, ctx.PaneSize())
+	if !ok {
+		rect = redsmath.RectFromSize(ctx.PaneSize().X, ctx.PaneSize().Y)
+	}
+	view, ok := p.scopeViewForWindow(windowID)
+	if !ok {
+		view = p.mainScopeView()
+	}
+	transforms = scopeTransformForWindow(rect, view)
+
+	center := mapRepositionCursorCenter(rect)
 	delta := mouse.Pos.Sub(center)
 	if delta.X == 0 && delta.Y == 0 {
 		return true
 	}
 
 	deltaWorld := transforms.WorldFromWindowV(delta)
-	p.center = p.center.Sub(deltaWorld)
+	p.updateScopeViewForWindow(windowID, func(view *ScopeView) {
+		view.Center = view.Center.Sub(deltaWorld)
+	})
 
 	ctx.Platform.SetMousePosition(ctx.PaneRect.Min.Add(center))
 	mouse.Pos = center
@@ -2424,7 +2522,7 @@ func (p *ASDEXPane) consumeMouseEvents(
 	if mouse.Wheel.Y != 0 && paneLocal.Contains(mouse.Pos) {
 		oldRangeFeet := p.rangeFeet
 		oldCenter := p.center
-		p.setRangeSetting(p.rangeSetting + wheelRangeDelta(mouse.Wheel.Y))
+		p.setMainRangeSetting(p.rangeSetting + wheelRangeDelta(mouse.Wheel.Y))
 		newRangeFeet := p.rangeFeet
 
 		if oldRangeFeet > 0 && newRangeFeet > 0 && newRangeFeet != oldRangeFeet {
