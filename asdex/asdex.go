@@ -407,14 +407,45 @@ func (p *ASDEXPane) Draw(ctx *panes.Context, zcb *renderer.ZCmdBuffer) {
 		RunwayClosed:        p.tempData.RunwayClosed,
 	})
 	p.alertRepository.ApplyChanges(alertChanges)
+	alertTargetIDs := p.alertRepository.AircraftIDsInAlertSet()
+	alertInProgress := p.alertRepository.AlertInProgress()
+	alertOn := alertFlashOn(now)
 
 	mainRect := redsmath.RectFromSize(ctx.PaneSize().X, ctx.PaneSize().Y)
-	transforms = p.renderScopeWindow(ctx, zcb, 0, mainScopeWindowID, mainRect, referenceExtent, p.mainScopeView(), targets, now, true)
+	transforms = p.renderScopeWindow(
+		ctx,
+		zcb,
+		0,
+		mainScopeWindowID,
+		mainRect,
+		referenceExtent,
+		p.mainScopeView(),
+		targets,
+		now,
+		true,
+		alertTargetIDs,
+		alertInProgress,
+		alertOn,
+	)
 	for i, win := range p.windows.secondary {
 		if win.Hidden {
 			continue
 		}
-		p.renderScopeWindow(ctx, zcb, i+1, win.ID, win.Rect, referenceExtent, win.View, targets, now, false)
+		p.renderScopeWindow(
+			ctx,
+			zcb,
+			i+1,
+			win.ID,
+			win.Rect,
+			referenceExtent,
+			win.View,
+			targets,
+			now,
+			false,
+			alertTargetIDs,
+			alertInProgress,
+			alertOn,
+		)
 	}
 	p.renderWindowBorders(ctx, zcb, transforms)
 	p.renderNewWindowPreview(ctx, zcb, transforms)
@@ -511,6 +542,9 @@ func (p *ASDEXPane) renderScopeWindow(
 	targets []*Target,
 	now time.Time,
 	drawDraft bool,
+	alertTargetIDs map[string]bool,
+	alertInProgress bool,
+	alertOn bool,
 ) radar.ScopeTransformations {
 	if p == nil || ctx == nil || zcb == nil || rect.Empty() {
 		return radar.ScopeTransformations{}
@@ -598,6 +632,8 @@ func (p *ASDEXPane) renderScopeWindow(
 			Brightness:          brightnessDefault,
 			ScopeRotationDeg:    int(view.Rotation),
 			HighlightedTargetID: highlightedTargetID,
+			AlertTargetIDs:      alertTargetIDs,
+			AlertFlashOn:        alertOn,
 		},
 	)
 	targetCB.DisableScissor()
@@ -637,10 +673,23 @@ func (p *ASDEXPane) renderScopeWindow(
 					if length, ok := p.leaderLengthOverride(windowID, target.ID); ok {
 						settings.LeaderLength = length
 					}
+					settings.AlertInProgress = alertInProgress
+					if alertInProgress && !alertTargetIDs[target.ID] {
+						settings.FullDataBlocks = false
+					}
+					if alertTargetIDs[target.ID] {
+						settings.FullDataBlocks = true
+					}
 				}
 				return settings
 			},
 			ShowDataBlockForTarget: func(target *Target, settings DataBlockSettings) bool {
+				if target == nil || target.Suspended || target.Dropped || !targetCanHaveDataBlock(target) {
+					return false
+				}
+				if alertInProgress {
+					return true
+				}
 				return p.targetShowsDataBlockInWindow(target, windowID, settings)
 			},
 			ShowBeaconCodeForTarget: func(target *Target) bool {

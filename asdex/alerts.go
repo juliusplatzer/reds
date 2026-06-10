@@ -119,6 +119,32 @@ func (r *AlertRepository) AircraftIsInAlert(targetID string) bool {
 	return false
 }
 
+func (r *AlertRepository) AircraftIDsInAlertSet() map[string]bool {
+	out := make(map[string]bool)
+	if r == nil {
+		return out
+	}
+
+	for _, alert := range r.alerts {
+		for _, id := range alert.AircraftIDs {
+			id = strings.TrimSpace(id)
+			if id != "" {
+				out[id] = true
+			}
+		}
+	}
+	return out
+}
+
+func alertFlashOn(now time.Time) bool {
+	if now.IsZero() {
+		return true
+	}
+
+	// CRC toggles alert aircraft symbol color once per second.
+	return now.Unix()%2 == 0
+}
+
 type AlertMessageBox struct {
 	location RelativeScreenLocation
 	list     ScreenList
