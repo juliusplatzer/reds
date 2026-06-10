@@ -384,10 +384,10 @@ func (p *ASDEXPane) Draw(ctx *panes.Context, zcb *renderer.ZCmdBuffer) {
 				scopeTransforms.WorldFromWindowP(ctx.Mouse.Pos.Sub(windowRect.Min)),
 			)
 		} else {
-			p.hoveredTempData = TempDataHit{Kind: TempDataHitNone, Index: -1}
+			p.hoveredTempData = TempDataHit{Type: TempDataHitNone, Index: -1}
 		}
 	} else {
-		p.hoveredTempData = TempDataHit{Kind: TempDataHitNone, Index: -1}
+		p.hoveredTempData = TempDataHit{Type: TempDataHitNone, Index: -1}
 	}
 	p.applyCurrentCursor(ctx)
 	p.coastList.SetEntries(p.buildCoastSuspendEntries(now))
@@ -842,7 +842,7 @@ func (p *ASDEXPane) activateDcbHit(_ *panes.Context, hit DcbHit) bool {
 		p.tempTextCommand = nil
 		p.tempTextPlacement = nil
 		p.tempDataSelectMode = TempDataSelectNone
-		p.hoveredTempData = TempDataHit{Kind: TempDataHitNone, Index: -1}
+		p.hoveredTempData = TempDataHit{Type: TempDataHitNone, Index: -1}
 		p.tempData.ClearHighlights()
 		p.newWindow = nil
 		p.previewArea.SetSystemResponse("")
@@ -876,7 +876,7 @@ func (p *ASDEXPane) startRangeSpinner() {
 	p.tempTextCommand = nil
 	p.tempTextPlacement = nil
 	p.tempDataSelectMode = TempDataSelectNone
-	p.hoveredTempData = TempDataHit{Kind: TempDataHitNone, Index: -1}
+	p.hoveredTempData = TempDataHit{Type: TempDataHitNone, Index: -1}
 	p.tempData.ClearHighlights()
 	p.newWindow = nil
 	p.commandEntry.Clear()
@@ -926,7 +926,7 @@ func (p *ASDEXPane) commitDcbSpinner() {
 	}
 
 	spinner := p.dcbSpinner
-	switch spinner.Kind {
+	switch spinner.Type {
 	case DcbSpinnerRange:
 		if strings.TrimSpace(spinner.InputText()) == "" {
 			p.dcbSpinner = nil
@@ -957,7 +957,7 @@ func (p *ASDEXPane) incrementActiveDcbSpinner(delta int) {
 		return
 	}
 
-	switch p.dcbSpinner.Kind {
+	switch p.dcbSpinner.Type {
 	case DcbSpinnerRange:
 		windowID := p.dcbSpinner.WindowID
 		view, ok := p.scopeViewForWindow(windowID)
@@ -1347,7 +1347,7 @@ func (p *ASDEXPane) resolveCursorMode(ctx *panes.Context) CursorMode {
 		return CursorModeScope
 	}
 	if p != nil && p.tempDataSelectMode != TempDataSelectNone {
-		if p.hoveredTempData.Kind != TempDataHitNone {
+		if p.hoveredTempData.Type != TempDataHitNone {
 			return CursorModeSelect
 		}
 		return CursorModeScope
@@ -1363,7 +1363,7 @@ func (p *ASDEXPane) resolveCursorMode(ctx *panes.Context) CursorMode {
 	}
 	if p != nil && p.showCoastList && ctx != nil && ctx.Mouse != nil {
 		hit := p.coastList.HitTest(ctx.Mouse.Pos, p.fonts.font, p.eramTextFonts.font, ctx.PaneSize())
-		if hit.Kind == CoastListHitEntry &&
+		if hit.Type == CoastListHitEntry &&
 			(hit.Status == CoastListEntrySuspended ||
 				p.commandMode == CommandModeTerminateControl) {
 			return CursorModeSelect
@@ -1576,7 +1576,7 @@ func (p *ASDEXPane) cancelActiveCommand() {
 	p.tempTextCommand = nil
 	p.tempTextPlacement = nil
 	p.tempDataSelectMode = TempDataSelectNone
-	p.hoveredTempData = TempDataHit{Kind: TempDataHitNone, Index: -1}
+	p.hoveredTempData = TempDataHit{Type: TempDataHitNone, Index: -1}
 	p.tempData.ClearHighlights()
 	p.newWindow = nil
 	p.dcb.ReturnToMainMenu()
@@ -1816,7 +1816,7 @@ func (p *ASDEXPane) startMultiPreviewReposition() {
 	p.tempTextCommand = nil
 	p.tempTextPlacement = nil
 	p.tempDataSelectMode = TempDataSelectNone
-	p.hoveredTempData = TempDataHit{Kind: TempDataHitNone, Index: -1}
+	p.hoveredTempData = TempDataHit{Type: TempDataHitNone, Index: -1}
 	p.tempData.ClearHighlights()
 	p.newWindow = nil
 	p.commandEntry.Clear()
@@ -1839,7 +1839,7 @@ func (p *ASDEXPane) startMultiCoastListReposition() {
 	p.tempTextCommand = nil
 	p.tempTextPlacement = nil
 	p.tempDataSelectMode = TempDataSelectNone
-	p.hoveredTempData = TempDataHit{Kind: TempDataHitNone, Index: -1}
+	p.hoveredTempData = TempDataHit{Type: TempDataHitNone, Index: -1}
 	p.tempData.ClearHighlights()
 	p.newWindow = nil
 	p.commandEntry.Clear()
@@ -1957,8 +1957,8 @@ func (p *ASDEXPane) handleNormalCommandKeyboard(ctx *panes.Context) bool {
 		}
 		return false
 	case keyboard.WasPressed(platform.KeyEnter), keyboard.WasPressed(platform.KeyKeypadEnter):
-		kind := p.commandEntry.Kind()
-		switch kind {
+		entryType := p.commandEntry.Type()
+		switch entryType {
 		case CommandTextEntryLeaderDirection, CommandTextEntryLeaderLength:
 		default:
 			return false
@@ -1983,7 +1983,7 @@ func (p *ASDEXPane) handleNormalCommandKeyboard(ctx *panes.Context) bool {
 		}
 
 		p.commandEntry.Clear()
-		if kind == CommandTextEntryLeaderLength {
+		if entryType == CommandTextEntryLeaderLength {
 			p.previewArea.SetSystemResponse("INVALID LNG")
 		} else {
 			p.previewArea.SetSystemResponse("INVALID ENTRY")
@@ -2305,7 +2305,7 @@ func (p *ASDEXPane) updateCoastListHover(ctx *panes.Context) {
 	}
 
 	hit := p.coastList.HitTest(ctx.Mouse.Pos, p.fonts.font, p.eramTextFonts.font, ctx.PaneSize())
-	if hit.Kind == CoastListHitEntry &&
+	if hit.Type == CoastListHitEntry &&
 		(hit.Status == CoastListEntrySuspended ||
 			p.commandMode == CommandModeTerminateControl) {
 		p.hoveredCoastListTarget = hit.TargetID
@@ -2325,7 +2325,7 @@ func (p *ASDEXPane) consumeCoastListClicks(ctx *panes.Context) bool {
 		return false
 	}
 
-	switch hit.Kind {
+	switch hit.Type {
 	case CoastListHitHeader:
 		p.coastList.ToggleExpanded()
 	case CoastListHitUpArrow:

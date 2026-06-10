@@ -164,10 +164,10 @@ type surfaceHoldBar struct {
 	StationMaxFeet float32
 }
 
-type activeRunwayOperationKind int
+type activeRunwayOperationType int
 
 const (
-	activeRunwayOperationLanding activeRunwayOperationKind = iota
+	activeRunwayOperationLanding activeRunwayOperationType = iota
 	activeRunwayOperationDeparture
 )
 
@@ -176,7 +176,7 @@ type activeRunwayOperation struct {
 	RunwayID string
 
 	RunwayIndex int
-	Kind        activeRunwayOperationKind
+	Type        activeRunwayOperationType
 
 	DirectionFeet redsmath.Vec2
 
@@ -520,7 +520,7 @@ func (sl *SafetyLogic) closedRunwayAlert(
 
 	alertType := SafetyAlertLandingClosedRunway
 	description := "LANDING ON CLOSED RWY"
-	if operation.Kind == activeRunwayOperationDeparture {
+	if operation.Type == activeRunwayOperationDeparture {
 		alertType = SafetyAlertDepartureClosedRunway
 		description = "DEPARTURE ON CLOSED RWY"
 	}
@@ -718,7 +718,7 @@ func (sl *SafetyLogic) updateOperationForTarget(target *Target) {
 		return
 	}
 
-	switch previous.Kind {
+	switch previous.Type {
 	case activeRunwayOperationLanding:
 		if sl.continueLandingRollout(target, previous) {
 			sl.activeOperations[target.ID] = sl.updatedOperation(target, previous)
@@ -807,7 +807,7 @@ func approachLandingForRunwayEnd(
 		TargetID:           target.ID,
 		RunwayID:           rwy.ID,
 		RunwayIndex:        runwayIndex,
-		Kind:               activeRunwayOperationLanding,
+		Type:               activeRunwayOperationLanding,
 		DirectionFeet:      direction,
 		StartThresholdFeet: threshold,
 		StationFeet:        station,
@@ -852,7 +852,7 @@ func (sl *SafetyLogic) detectDeparture(target *Target) (activeRunwayOperation, b
 				TargetID:           target.ID,
 				RunwayID:           rwy.ID,
 				RunwayIndex:        i,
-				Kind:               activeRunwayOperationDeparture,
+				Type:               activeRunwayOperationDeparture,
 				DirectionFeet:      direction,
 				StartThresholdFeet: startThreshold,
 				StationFeet:        station,
