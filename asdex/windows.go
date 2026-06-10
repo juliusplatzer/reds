@@ -30,6 +30,40 @@ type ScopeWindow struct {
 	Hidden bool
 }
 
+// WindowDisplayState holds per-scope-window display settings. World objects
+// such as targets, temp data, holdbars and runway closures remain global.
+type WindowDisplayState struct {
+	DB DataBlockSettings
+
+	TargetShowDBOverrides map[string]bool
+
+	LeaderDirectionOverrides map[string]LeaderDirection
+	LeaderLengthOverrides    map[string]int
+
+	// Later:
+	// TempTextShowDBOverrides map[string]bool
+	// TempTextLeaderDirectionOverrides map[string]LeaderDirection
+	// TempTextLeaderLengthOverrides map[string]int
+	// DbTraitAreas []DataBlockTraitArea
+}
+
+func NewWindowDisplayState() *WindowDisplayState {
+	return &WindowDisplayState{
+		DB: DefaultDataBlockSettings(),
+	}
+}
+
+// ScopeHoverState is transient window-local hover state. It is not a target
+// property because the same target can be rendered in multiple scope windows.
+type ScopeHoverState struct {
+	WindowID ScopeWindowID
+	TargetID string
+
+	MouseWorld redsmath.Vec2
+	Revision   uint64
+	Valid      bool
+}
+
 type ScopeWindowManager struct {
 	nextID   ScopeWindowID
 	activeID ScopeWindowID

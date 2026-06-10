@@ -97,11 +97,8 @@ type ASDEXPane struct {
 	cursors    CursorSet
 	cursorMode CursorMode
 
-	datablockSettingsByWindow map[ScopeWindowID]DataBlockSettings
+	displayStateByWindow      map[ScopeWindowID]*WindowDisplayState
 	datablockTimeshareStart   time.Time
-	targetShowDBByWindow      map[ScopeWindowID]map[string]bool
-	leaderDirectionByWindow   map[ScopeWindowID]map[string]LeaderDirection
-	leaderLengthByWindow      map[ScopeWindowID]map[string]int
 	showBeaconUntilByTargetID map[string]time.Time
 	previewArea               PreviewArea
 	coastList                 CoastList
@@ -133,11 +130,7 @@ type ASDEXPane struct {
 	rightClickCandidate bool
 	rightClickDragged   bool
 
-	highlightedTargetID     string
-	highlightedTargetWindow ScopeWindowID
-	highlightMouseWorld     redsmath.Vec2
-	highlightStoreRevision  uint64
-	highlightQueryValid     bool
+	hover ScopeHoverState
 
 	center          redsmath.Vec2
 	rangeSetting    int
@@ -196,13 +189,10 @@ func NewPane(airport string) (*ASDEXPane, error) {
 		fonts:             fonts,
 		eramTextFonts:     eramTextFonts,
 
-		datablockSettingsByWindow: map[ScopeWindowID]DataBlockSettings{
-			mainScopeWindowID: DefaultDataBlockSettings(),
+		displayStateByWindow: map[ScopeWindowID]*WindowDisplayState{
+			mainScopeWindowID: NewWindowDisplayState(),
 		},
 		datablockTimeshareStart:   time.Now(),
-		targetShowDBByWindow:      make(map[ScopeWindowID]map[string]bool),
-		leaderDirectionByWindow:   make(map[ScopeWindowID]map[string]LeaderDirection),
-		leaderLengthByWindow:      make(map[ScopeWindowID]map[string]int),
 		showBeaconUntilByTargetID: make(map[string]time.Time),
 		previewArea:               preview,
 		coastList:                 coastList,
@@ -562,8 +552,8 @@ func (p *ASDEXPane) renderScopeWindow(
 	targetCB.Scissor(x, y, w, h)
 	transforms.LoadWorldViewingMatrices(targetCB)
 	highlightedTargetID := ""
-	if p.highlightedTargetWindow == windowID {
-		highlightedTargetID = p.highlightedTargetID
+	if p.hover.WindowID == windowID {
+		highlightedTargetID = p.hover.TargetID
 	}
 	DrawTargets(
 		targets,
@@ -1053,6 +1043,21 @@ func (p *ASDEXPane) activeWindowID() ScopeWindowID {
 	return p.windows.ActiveWindowID()
 }
 
+func (p *ASDEXPane) displayStateForWindow(id ScopeWindowID) *WindowDisplayState {
+	if p == nil {
+		return NewWindowDisplayState()
+	}
+	if p.displayStateByWindow == nil {
+		p.displayStateByWindow = make(map[ScopeWindowID]*WindowDisplayState)
+	}
+	state := p.displayStateByWindow[id]
+	if state == nil {
+		state = NewWindowDisplayState()
+		p.displayStateByWindow[id] = state
+	}
+	return state
+}
+
 func (p *ASDEXPane) dataBlockSettingsForWindow(id ScopeWindowID) DataBlockSettings {
 	if p == nil {
 		settings := DefaultDataBlockSettings()
@@ -1060,15 +1065,7 @@ func (p *ASDEXPane) dataBlockSettingsForWindow(id ScopeWindowID) DataBlockSettin
 		return settings
 	}
 
-	if p.datablockSettingsByWindow == nil {
-		p.datablockSettingsByWindow = make(map[ScopeWindowID]DataBlockSettings)
-	}
-
-	settings, ok := p.datablockSettingsByWindow[id]
-	if !ok {
-		settings = DefaultDataBlockSettings()
-		p.datablockSettingsByWindow[id] = settings
-	}
+	settings := p.displayStateForWindow(id).DB
 	settings.TimesharePrimary = p.timesharePrimary(time.Now())
 	return settings
 }
@@ -1077,26 +1074,19 @@ func (p *ASDEXPane) setDataBlockSettingsForWindow(id ScopeWindowID, settings Dat
 	if p == nil {
 		return
 	}
-	if p.datablockSettingsByWindow == nil {
-		p.datablockSettingsByWindow = make(map[ScopeWindowID]DataBlockSettings)
-	}
-	p.datablockSettingsByWindow[id] = settings
+	p.displayStateForWindow(id).DB = settings
 }
 
 func (p *ASDEXPane) targetShowDBOverride(
 	windowID ScopeWindowID,
 	targetID string,
 ) (bool, bool) {
-	if p == nil || p.targetShowDBByWindow == nil {
+	if p == nil {
 		return false, false
 	}
 
-	byTarget := p.targetShowDBByWindow[windowID]
-	if byTarget == nil {
-		return false, false
-	}
-
-	value, ok := byTarget[targetID]
+	state := p.displayStateForWindow(windowID)
+	value, ok := state.TargetShowDBOverrides[targetID]
 	return value, ok
 }
 
@@ -1109,20 +1099,20 @@ func (p *ASDEXPane) setTargetShowDBOverride(
 		return
 	}
 
-	if p.targetShowDBByWindow == nil {
-		p.targetShowDBByWindow = make(map[ScopeWindowID]map[string]bool)
+	state := p.displayStateForWindow(windowID)
+	if state.TargetShowDBOverrides == nil {
+		state.TargetShowDBOverrides = make(map[string]bool)
 	}
-	if p.targetShowDBByWindow[windowID] == nil {
-		p.targetShowDBByWindow[windowID] = make(map[string]bool)
-	}
-	p.targetShowDBByWindow[windowID][targetID] = value
+	state.TargetShowDBOverrides[targetID] = value
 }
 
 func (p *ASDEXPane) clearTargetShowDBOverrides(windowID ScopeWindowID) {
-	if p == nil || p.targetShowDBByWindow == nil {
+	if p == nil || p.displayStateByWindow == nil {
 		return
 	}
-	delete(p.targetShowDBByWindow, windowID)
+	if state := p.displayStateByWindow[windowID]; state != nil {
+		state.TargetShowDBOverrides = nil
+	}
 }
 
 func (p *ASDEXPane) targetShowsDataBlockInWindow(
@@ -1152,14 +1142,11 @@ func (p *ASDEXPane) leaderDirectionOverride(
 	windowID ScopeWindowID,
 	targetID string,
 ) (LeaderDirection, bool) {
-	if p == nil || p.leaderDirectionByWindow == nil {
+	if p == nil {
 		return LeaderNE, false
 	}
-	byTarget := p.leaderDirectionByWindow[windowID]
-	if byTarget == nil {
-		return LeaderNE, false
-	}
-	value, ok := byTarget[targetID]
+	state := p.displayStateForWindow(windowID)
+	value, ok := state.LeaderDirectionOverrides[targetID]
 	return value, ok
 }
 
@@ -1171,34 +1158,31 @@ func (p *ASDEXPane) setLeaderDirectionOverride(
 	if p == nil || targetID == "" {
 		return
 	}
-	if p.leaderDirectionByWindow == nil {
-		p.leaderDirectionByWindow = make(map[ScopeWindowID]map[string]LeaderDirection)
+	state := p.displayStateForWindow(windowID)
+	if state.LeaderDirectionOverrides == nil {
+		state.LeaderDirectionOverrides = make(map[string]LeaderDirection)
 	}
-	if p.leaderDirectionByWindow[windowID] == nil {
-		p.leaderDirectionByWindow[windowID] = make(map[string]LeaderDirection)
-	}
-	p.leaderDirectionByWindow[windowID][targetID] = value
+	state.LeaderDirectionOverrides[targetID] = value
 }
 
 func (p *ASDEXPane) clearLeaderDirectionOverrides(windowID ScopeWindowID) {
-	if p == nil || p.leaderDirectionByWindow == nil {
+	if p == nil || p.displayStateByWindow == nil {
 		return
 	}
-	delete(p.leaderDirectionByWindow, windowID)
+	if state := p.displayStateByWindow[windowID]; state != nil {
+		state.LeaderDirectionOverrides = nil
+	}
 }
 
 func (p *ASDEXPane) leaderLengthOverride(
 	windowID ScopeWindowID,
 	targetID string,
 ) (int, bool) {
-	if p == nil || p.leaderLengthByWindow == nil {
+	if p == nil {
 		return 0, false
 	}
-	byTarget := p.leaderLengthByWindow[windowID]
-	if byTarget == nil {
-		return 0, false
-	}
-	value, ok := byTarget[targetID]
+	state := p.displayStateForWindow(windowID)
+	value, ok := state.LeaderLengthOverrides[targetID]
 	return value, ok
 }
 
@@ -1210,20 +1194,20 @@ func (p *ASDEXPane) setLeaderLengthOverride(
 	if p == nil || targetID == "" {
 		return
 	}
-	if p.leaderLengthByWindow == nil {
-		p.leaderLengthByWindow = make(map[ScopeWindowID]map[string]int)
+	state := p.displayStateForWindow(windowID)
+	if state.LeaderLengthOverrides == nil {
+		state.LeaderLengthOverrides = make(map[string]int)
 	}
-	if p.leaderLengthByWindow[windowID] == nil {
-		p.leaderLengthByWindow[windowID] = make(map[string]int)
-	}
-	p.leaderLengthByWindow[windowID][targetID] = value
+	state.LeaderLengthOverrides[targetID] = value
 }
 
 func (p *ASDEXPane) clearLeaderLengthOverrides(windowID ScopeWindowID) {
-	if p == nil || p.leaderLengthByWindow == nil {
+	if p == nil || p.displayStateByWindow == nil {
 		return
 	}
-	delete(p.leaderLengthByWindow, windowID)
+	if state := p.displayStateByWindow[windowID]; state != nil {
+		state.LeaderLengthOverrides = nil
+	}
 }
 
 func (p *ASDEXPane) timesharePrimary(now time.Time) bool {
@@ -1419,18 +1403,18 @@ func (p *ASDEXPane) updateHighlightedTargetInWindow(
 
 	mouseWorld := transforms.WorldFromWindowP(ctx.Mouse.Pos.Sub(windowRect.Min))
 	storeRevision := p.targets.HoverRevision()
-	if p.highlightQueryValid &&
-		p.highlightedTargetWindow == windowID &&
-		p.highlightMouseWorld == mouseWorld &&
-		p.highlightStoreRevision == storeRevision {
+	if p.hover.Valid &&
+		p.hover.WindowID == windowID &&
+		p.hover.MouseWorld == mouseWorld &&
+		p.hover.Revision == storeRevision {
 		return
 	}
 
-	p.highlightedTargetID = p.targets.NearestTargetID(mouseWorld)
-	p.highlightedTargetWindow = windowID
-	p.highlightMouseWorld = mouseWorld
-	p.highlightStoreRevision = storeRevision
-	p.highlightQueryValid = true
+	p.hover.TargetID = p.targets.NearestTargetID(mouseWorld)
+	p.hover.WindowID = windowID
+	p.hover.MouseWorld = mouseWorld
+	p.hover.Revision = storeRevision
+	p.hover.Valid = true
 }
 
 func (p *ASDEXPane) clearHighlightedTarget() {
@@ -1438,20 +1422,18 @@ func (p *ASDEXPane) clearHighlightedTarget() {
 		return
 	}
 
-	if !p.highlightQueryValid && p.highlightedTargetID == "" {
+	if !p.hover.Valid && p.hover.TargetID == "" {
 		return
 	}
 
-	p.highlightedTargetID = ""
-	p.highlightedTargetWindow = mainScopeWindowID
-	p.highlightQueryValid = false
+	p.hover = ScopeHoverState{}
 }
 
 func (p *ASDEXPane) highlightedTarget() *Target {
 	if p == nil {
 		return nil
 	}
-	return p.targets.TargetByID(p.highlightedTargetID)
+	return p.targets.TargetByID(p.hover.TargetID)
 }
 
 func (p *ASDEXPane) activeCommandLines() []string {
@@ -2281,7 +2263,7 @@ func (p *ASDEXPane) buildCoastSuspendEntries(now time.Time) []CoastListEntry {
 		case target.Suspended:
 			entry.Status = CoastListEntrySuspended
 			entry.TimeoutSeconds = targetTimeoutSeconds(target.SuspendUntil, now)
-			entry.Selected = target.Highlighted
+			entry.Selected = p.hover.TargetID == target.ID
 		default:
 			continue
 		}
