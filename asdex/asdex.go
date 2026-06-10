@@ -910,8 +910,22 @@ func (p *ASDEXPane) activateDcbHit(_ *panes.Context, hit DcbHit) bool {
 			p.startRangeSpinner()
 		}
 		return true
+	case DcbFunctionDone:
+		p.closeDcbSubmenu()
+		return true
+	case DcbFunctionDataBlockArea:
+		p.openDbAreaDcbMenu()
+		return true
 	case DcbFunctionDataBlockEdit:
 		p.openDbEditDcbMenu()
+		return true
+	case DcbFunctionDefineDbTraitArea,
+		DcbFunctionDefineDbOffArea,
+		DcbFunctionModifyDbTraitArea,
+		DcbFunctionDeleteAllDbAreas,
+		DcbFunctionDeleteOneDbArea:
+		p.previewArea.SetSystemResponse("")
+		p.clearHighlightedTarget()
 		return true
 	case DcbFunctionDbFullPart:
 		p.toggleDbFullPart()
@@ -1007,6 +1021,18 @@ func (p *ASDEXPane) openDbEditDcbMenu() {
 	p.clearDcbModalConflicts()
 	p.dcb.SetMenu(DcbMenuDbEdit)
 	p.dcbMenuCommand = NewDcbMenuCommand("DB EDIT")
+	p.previewArea.SetSystemResponse("")
+	p.clearHighlightedTarget()
+}
+
+func (p *ASDEXPane) openDbAreaDcbMenu() {
+	if p == nil {
+		return
+	}
+
+	p.clearDcbModalConflicts()
+	p.dcb.SetMenu(DcbMenuDbArea)
+	p.dcbMenuCommand = NewDcbMenuCommand("DB AREA")
 	p.previewArea.SetSystemResponse("")
 	p.clearHighlightedTarget()
 }

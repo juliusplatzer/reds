@@ -26,6 +26,7 @@ const (
 	DcbMenuTempData
 	DcbMenuClosedRunway
 	DcbMenuDbEdit
+	DcbMenuDbArea
 	DcbMenuOff
 )
 
@@ -74,6 +75,11 @@ const (
 	DcbFunctionLocal2
 	DcbFunctionDataBlockArea
 	DcbFunctionDataBlockEdit
+	DcbFunctionDefineDbTraitArea
+	DcbFunctionDefineDbOffArea
+	DcbFunctionModifyDbTraitArea
+	DcbFunctionDeleteAllDbAreas
+	DcbFunctionDeleteOneDbArea
 	DcbFunctionDbFullPart
 	DcbFunctionDbAltitudeOnOff
 	DcbFunctionDbTypeOnOff
@@ -535,6 +541,11 @@ func isLargeDcbFunction(function DcbFunction) bool {
 		DcbFunctionShowHiddenTempData,
 		DcbFunctionHideTempData,
 		DcbFunctionDeleteGlobalTempData,
+		DcbFunctionDefineDbTraitArea,
+		DcbFunctionDefineDbOffArea,
+		DcbFunctionModifyDbTraitArea,
+		DcbFunctionDeleteAllDbAreas,
+		DcbFunctionDeleteOneDbArea,
 		DcbFunctionDbFullPart,
 		DcbFunctionDbScratchpadOnOff,
 		DcbFunctionDone,
@@ -811,6 +822,51 @@ func (d *Dcb) dbEditButtonSpecs(state DcbState) []DcbButtonSpec {
 	}
 }
 
+func (d *Dcb) dbAreaButtonSpecs(state DcbState) []DcbButtonSpec {
+	applyState := func(spec DcbButtonSpec) DcbButtonSpec {
+		if state.ActiveSpinnerFunction == spec.Function {
+			spec.Active = true
+		}
+		return spec
+	}
+	normal := func(function DcbFunction, lines ...string) DcbButtonSpec {
+		return applyState(DcbButtonSpec{
+			Function: function,
+			Type:     DcbButtonNormal,
+			Large:    isLargeDcbFunction(function),
+			Visible:  true,
+			Lines:    append([]string(nil), lines...),
+		})
+	}
+	vacant := func() DcbButtonSpec {
+		return DcbButtonSpec{
+			Function: DcbFunctionVacant,
+			Type:     DcbButtonVacant,
+			Large:    true,
+			Visible:  true,
+		}
+	}
+
+	return []DcbButtonSpec{
+		vacant(),
+		vacant(),
+		vacant(),
+		vacant(),
+
+		normal(DcbFunctionDefineDbTraitArea, "DEFINE", "TRAIT", "AREA"),
+		normal(DcbFunctionDefineDbOffArea, "DEFINE", "OFF", "AREA"),
+		normal(DcbFunctionModifyDbTraitArea, "MODIFY", "TRAIT", "AREA"),
+		normal(DcbFunctionDeleteAllDbAreas, "DELETE", "ALL", "AREAS"),
+		normal(DcbFunctionDeleteOneDbArea, "DELETE", "ONE", "AREA"),
+		normal(DcbFunctionDone, "DONE"),
+
+		vacant(),
+		vacant(),
+		vacant(),
+		vacant(),
+	}
+}
+
 func (d *Dcb) rangeLabel(state DcbState) string {
 	return strconv.Itoa(clampInt(state.Range, asdexMinRangeSetting, asdexMaxRangeSetting))
 }
@@ -837,6 +893,8 @@ func (d *Dcb) buttonSpecs(state DcbState) []DcbButtonSpec {
 		return d.closedRunwayButtonSpecs(state)
 	case DcbMenuDbEdit:
 		return d.dbEditButtonSpecs(state)
+	case DcbMenuDbArea:
+		return d.dbAreaButtonSpecs(state)
 	default:
 		return d.mainButtonSpecs(state)
 	}
