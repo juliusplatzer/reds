@@ -27,6 +27,7 @@ const (
 	DcbMenuClosedRunway
 	DcbMenuDbEdit
 	DcbMenuDbArea
+	DcbMenuDefineTraitArea
 	DcbMenuOff
 )
 
@@ -88,6 +89,11 @@ const (
 	DcbFunctionDbFixOnOff
 	DcbFunctionDbVelocityOnOff
 	DcbFunctionDbScratchpadOnOff
+	DcbFunctionDbAreaDataBlockCharSize
+	DcbFunctionDbAreaDataBlockBrightness
+	DcbFunctionDbAreaVectorOnOff
+	DcbFunctionDbAreaLeaderLength
+	DcbFunctionDbAreaLeaderDirection
 	DcbFunctionDataBlocksOnOff
 	DcbFunctionInitControl
 	DcbFunctionTrackSuspend
@@ -184,6 +190,9 @@ type DcbState struct {
 	ShowVelocity    bool
 	ShowScratchpads bool
 
+	HasSelectedDbArea    bool
+	SelectedDbAreaTraits DataBlockAreaTraits
+
 	ClosedRunways []DcbRunwayClosureState
 
 	ActiveSpinnerFunction DcbFunction
@@ -199,6 +208,10 @@ type DcbSpinnerType int
 const (
 	DcbSpinnerNone DcbSpinnerType = iota
 	DcbSpinnerRange
+	DcbSpinnerDbAreaCharSize
+	DcbSpinnerDbAreaBrightness
+	DcbSpinnerDbAreaLeaderLength
+	DcbSpinnerDbAreaLeaderDirection
 )
 
 type DcbSpinner struct {
@@ -206,6 +219,7 @@ type DcbSpinner struct {
 	Function DcbFunction
 
 	WindowID ScopeWindowID
+	AreaID   string
 
 	Title string
 
@@ -250,6 +264,33 @@ func NewRangeDcbSpinner(windowID ScopeWindowID, currentRange int) *DcbSpinner {
 		Original: currentRange,
 		input:    "",
 		cursor:   0,
+	}
+}
+
+func NewDbAreaDcbSpinner(
+	spinnerType DcbSpinnerType,
+	function DcbFunction,
+	windowID ScopeWindowID,
+	areaID string,
+	title string,
+	min int,
+	max int,
+	currentValue int,
+) *DcbSpinner {
+	currentValue = clampInt(currentValue, min, max)
+	return &DcbSpinner{
+		Type:     spinnerType,
+		Function: function,
+		WindowID: windowID,
+		AreaID:   areaID,
+		Title:    title,
+		Min:      min,
+		Max:      max,
+		Step:     1,
+		Value:    currentValue,
+		Original: currentValue,
+		input:    strconv.Itoa(currentValue),
+		cursor:   len(strconv.Itoa(currentValue)),
 	}
 }
 
@@ -548,6 +589,11 @@ func isLargeDcbFunction(function DcbFunction) bool {
 		DcbFunctionDeleteOneDbArea,
 		DcbFunctionDbFullPart,
 		DcbFunctionDbScratchpadOnOff,
+		DcbFunctionDbAreaDataBlockCharSize,
+		DcbFunctionDbAreaDataBlockBrightness,
+		DcbFunctionDbAreaVectorOnOff,
+		DcbFunctionDbAreaLeaderLength,
+		DcbFunctionDbAreaLeaderDirection,
 		DcbFunctionDone,
 		DcbFunctionVacant:
 		return true
@@ -867,6 +913,81 @@ func (d *Dcb) dbAreaButtonSpecs(state DcbState) []DcbButtonSpec {
 	}
 }
 
+func (d *Dcb) defineTraitAreaButtonSpecs(state DcbState) []DcbButtonSpec {
+	applyState := func(spec DcbButtonSpec) DcbButtonSpec {
+		if state.ActiveSpinnerFunction == spec.Function {
+			spec.Active = true
+		}
+		return spec
+	}
+	traits := state.SelectedDbAreaTraits
+	if !state.HasSelectedDbArea {
+		traits = DefaultDataBlockAreaTraits()
+	}
+	normal := func(function DcbFunction, lines ...string) DcbButtonSpec {
+		return applyState(DcbButtonSpec{
+			Function: function,
+			Type:     DcbButtonNormal,
+			Large:    isLargeDcbFunction(function),
+			Visible:  true,
+			Lines:    append([]string(nil), lines...),
+		})
+	}
+	value := func(function DcbFunction, showValue bool, value string, lines ...string) DcbButtonSpec {
+		return applyState(DcbButtonSpec{
+			Function:  function,
+			Type:      DcbButtonValue,
+			Large:     isLargeDcbFunction(function),
+			Visible:   true,
+			Lines:     append([]string(nil), lines...),
+			ShowValue: showValue,
+			Value:     value,
+		})
+	}
+	toggle := func(function DcbFunction, on bool, onLabel string, offLabel string, lines ...string) DcbButtonSpec {
+		return applyState(DcbButtonSpec{
+			Function: function,
+			Type:     DcbButtonToggle,
+			Large:    isLargeDcbFunction(function),
+			Visible:  true,
+			Lines:    append([]string(nil), lines...),
+			On:       on,
+			OnLabel:  onLabel,
+			OffLabel: offLabel,
+		})
+	}
+	vacant := func() DcbButtonSpec {
+		return DcbButtonSpec{
+			Function: DcbFunctionVacant,
+			Type:     DcbButtonVacant,
+			Large:    true,
+			Visible:  true,
+		}
+	}
+
+	return []DcbButtonSpec{
+		vacant(),
+		vacant(),
+
+		toggle(DcbFunctionDbFullPart, traits.FullDataBlocks, "FULL", "PART"),
+		toggle(DcbFunctionDbAltitudeOnOff, traits.ShowAltitude, "ON", "OFF", "ALTITUDE"),
+		toggle(DcbFunctionDbTypeOnOff, traits.ShowTargetType, "ON", "OFF", "TYPE"),
+		toggle(DcbFunctionDbSensorsOnOff, traits.ShowSensors, "ON", "OFF", "SENSORS"),
+		toggle(DcbFunctionDbCategoryOnOff, traits.ShowCWT, "ON", "OFF", "CAT"),
+		toggle(DcbFunctionDbFixOnOff, traits.ShowFix, "ON", "OFF", "FIX"),
+		toggle(DcbFunctionDbVelocityOnOff, traits.ShowVelocity, "ON", "OFF", "VELOCITY"),
+		toggle(DcbFunctionDbScratchpadOnOff, traits.ShowScratchpads, "ON", "OFF", "SCRATCH", "PAD"),
+		value(DcbFunctionDbAreaDataBlockCharSize, true, strconv.Itoa(traits.FontSize), "DB", "SIZE"),
+		value(DcbFunctionDbAreaDataBlockBrightness, true, strconv.Itoa(traits.Brightness), "DB", "BRITE"),
+		toggle(DcbFunctionDbAreaVectorOnOff, traits.ShowVector, "ON", "OFF", "VECTOR"),
+		value(DcbFunctionDbAreaLeaderLength, true, strconv.Itoa(traits.LeaderLength), "LDR", "LNG"),
+		value(DcbFunctionDbAreaLeaderDirection, true, leaderDirectionDisplayValue(traits.LeaderDirection), "LDR", "DIR"),
+		normal(DcbFunctionDone, "DONE"),
+
+		vacant(),
+	}
+}
+
 func (d *Dcb) rangeLabel(state DcbState) string {
 	return strconv.Itoa(clampInt(state.Range, asdexMinRangeSetting, asdexMaxRangeSetting))
 }
@@ -895,6 +1016,8 @@ func (d *Dcb) buttonSpecs(state DcbState) []DcbButtonSpec {
 		return d.dbEditButtonSpecs(state)
 	case DcbMenuDbArea:
 		return d.dbAreaButtonSpecs(state)
+	case DcbMenuDefineTraitArea:
+		return d.defineTraitAreaButtonSpecs(state)
 	default:
 		return d.mainButtonSpecs(state)
 	}

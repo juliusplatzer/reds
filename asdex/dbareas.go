@@ -93,6 +93,18 @@ func NewDataBlockOffArea(id string, points []redsmath.Vec2) DataBlockArea {
 	}
 }
 
+func NewDataBlockTraitArea(id string, points []redsmath.Vec2) DataBlockArea {
+	traits := DefaultDataBlockAreaTraits()
+	traits.DataBlocksOff = false
+	return DataBlockArea{
+		ID:     id,
+		Type:   DataBlockAreaTrait,
+		Points: append([]redsmath.Vec2(nil), points...),
+		Bounds: boundsForTempPolygon(points),
+		Traits: traits,
+	}
+}
+
 func (s *WindowDisplayState) nextDataBlockAreaID() string {
 	if s == nil {
 		return ""
@@ -104,6 +116,19 @@ func (s *WindowDisplayState) nextDataBlockAreaID() string {
 	id := fmt.Sprintf("DBAREA:%d", s.NextDBAreaID)
 	s.NextDBAreaID++
 	return id
+}
+
+func (s *WindowDisplayState) selectedDataBlockArea() (*DataBlockArea, bool) {
+	if s == nil || s.SelectedDBAreaID == "" {
+		return nil, false
+	}
+
+	for i := range s.DataBlockAreas {
+		if s.DataBlockAreas[i].ID == s.SelectedDBAreaID {
+			return &s.DataBlockAreas[i], true
+		}
+	}
+	return nil, false
 }
 
 func (p *ASDEXPane) startDefineDbOffArea() {
@@ -118,6 +143,25 @@ func (p *ASDEXPane) startDefineDbOffArea() {
 	p.dcbMenuCommand = NewDcbMenuCommand("DB AREA", "DEFINE OFF AREA")
 	p.dbAreaDraft = &DataBlockAreaDraft{
 		Type:     DataBlockAreaOff,
+		WindowID: windowID,
+		Points:   make([]redsmath.Vec2, 0, maxTempAreaNodes+1),
+	}
+	p.previewArea.SetSystemResponse("")
+	p.clearHighlightedTarget()
+}
+
+func (p *ASDEXPane) startDefineDbTraitArea() {
+	if p == nil {
+		return
+	}
+
+	p.clearDcbModalConflicts()
+	windowID := p.activeWindowID()
+
+	p.dcb.SetMenu(DcbMenuDbArea)
+	p.dcbMenuCommand = NewDcbMenuCommand("DB AREA", "DEFINE TRAIT AREA")
+	p.dbAreaDraft = &DataBlockAreaDraft{
+		Type:     DataBlockAreaTrait,
 		WindowID: windowID,
 		Points:   make([]redsmath.Vec2, 0, maxTempAreaNodes+1),
 	}
@@ -242,6 +286,8 @@ func (p *ASDEXPane) finishDataBlockAreaDraft() {
 
 	var area DataBlockArea
 	switch draft.Type {
+	case DataBlockAreaTrait:
+		area = NewDataBlockTraitArea(id, polygon)
 	case DataBlockAreaOff:
 		area = NewDataBlockOffArea(id, polygon)
 	default:
@@ -252,8 +298,17 @@ func (p *ASDEXPane) finishDataBlockAreaDraft() {
 	state.SelectedDBAreaID = id
 
 	p.dbAreaDraft = nil
-	p.dcb.SetMenu(DcbMenuDbArea)
-	p.dcbMenuCommand = NewDcbMenuCommand("DB AREA")
+	switch draft.Type {
+	case DataBlockAreaTrait:
+		p.dcb.SetMenu(DcbMenuDefineTraitArea)
+		p.dcbMenuCommand = NewDcbMenuCommand("DB AREA", "DEFINE TRAIT AREA")
+	case DataBlockAreaOff:
+		p.dcb.SetMenu(DcbMenuDbArea)
+		p.dcbMenuCommand = NewDcbMenuCommand("DB AREA")
+	default:
+		p.dcb.SetMenu(DcbMenuDbArea)
+		p.dcbMenuCommand = NewDcbMenuCommand("DB AREA")
+	}
 	p.previewArea.SetSystemResponse("")
 	p.clearHighlightedTarget()
 }
@@ -333,7 +388,7 @@ func (p *ASDEXPane) showsDataBlockAreas() bool {
 	if p.dbAreaDraft != nil {
 		return true
 	}
-	return p.dcb.Menu() == DcbMenuDbArea
+	return p.dcb.Menu() == DcbMenuDbArea || p.dcb.Menu() == DcbMenuDefineTraitArea
 }
 
 func (p *ASDEXPane) drawDataBlockAreas(cb *renderer.CmdBuffer, windowID ScopeWindowID) {
@@ -428,4 +483,48 @@ func applyDataBlockAreaTraits(settings DataBlockSettings, traits DataBlockAreaTr
 	settings.LeaderLength = traits.LeaderLength
 	settings.LeaderDirection = traits.LeaderDirection
 	return settings
+}
+
+func leaderDirectionDisplayValue(direction LeaderDirection) string {
+	switch direction {
+	case LeaderSW:
+		return "1"
+	case LeaderS:
+		return "2"
+	case LeaderSE:
+		return "3"
+	case LeaderW:
+		return "4"
+	case LeaderE:
+		return "6"
+	case LeaderNW:
+		return "7"
+	case LeaderN:
+		return "8"
+	default:
+		return "9"
+	}
+}
+
+func leaderDirectionFromDisplayValue(value int) (LeaderDirection, bool) {
+	switch value {
+	case 1:
+		return LeaderSW, true
+	case 2:
+		return LeaderS, true
+	case 3:
+		return LeaderSE, true
+	case 4:
+		return LeaderW, true
+	case 6:
+		return LeaderE, true
+	case 7:
+		return LeaderNW, true
+	case 8:
+		return LeaderN, true
+	case 9:
+		return LeaderNE, true
+	default:
+		return LeaderNE, false
+	}
 }

@@ -823,7 +823,7 @@ func (p *ASDEXPane) dcbState() DcbState {
 	}
 	fields := p.dbFieldSettings
 
-	return DcbState{
+	state := DcbState{
 		Range:                 rangeSetting,
 		Mode:                  p.mode,
 		VectorOn:              true,
@@ -842,6 +842,14 @@ func (p *ASDEXPane) dcbState() DcbState {
 		ClosedRunways:         p.tempData.DcbRunwayClosureStates(&p.safetyLogic),
 		ActiveSpinnerFunction: activeSpinnerFunction,
 	}
+
+	windowState := p.displayStateForWindow(active.WindowID)
+	if area, ok := windowState.selectedDataBlockArea(); ok {
+		state.HasSelectedDbArea = true
+		state.SelectedDbAreaTraits = area.Traits
+	}
+
+	return state
 }
 
 func (p *ASDEXPane) currentSafetyRunwayConfiguration() SafetyRunwayConfiguration {
@@ -918,6 +926,10 @@ func (p *ASDEXPane) activateDcbHit(_ *panes.Context, hit DcbHit) bool {
 		return true
 	}
 
+	if p.dcb.Menu() == DcbMenuDefineTraitArea && p.activateDefineTraitAreaDcbHit(hit) {
+		return true
+	}
+
 	switch hit.Function {
 	case DcbFunctionRange:
 		if p.dcb.On() {
@@ -925,6 +937,13 @@ func (p *ASDEXPane) activateDcbHit(_ *panes.Context, hit DcbHit) bool {
 		}
 		return true
 	case DcbFunctionDone:
+		if p.dcb.Menu() == DcbMenuDefineTraitArea {
+			p.dcb.SetMenu(DcbMenuDbArea)
+			p.dcbMenuCommand = NewDcbMenuCommand("DB AREA")
+			p.previewArea.SetSystemResponse("")
+			p.clearHighlightedTarget()
+			return true
+		}
 		p.closeDcbSubmenu()
 		return true
 	case DcbFunctionDataBlockArea:
@@ -933,11 +952,13 @@ func (p *ASDEXPane) activateDcbHit(_ *panes.Context, hit DcbHit) bool {
 	case DcbFunctionDataBlockEdit:
 		p.openDbEditDcbMenu()
 		return true
+	case DcbFunctionDefineDbTraitArea:
+		p.startDefineDbTraitArea()
+		return true
 	case DcbFunctionDefineDbOffArea:
 		p.startDefineDbOffArea()
 		return true
-	case DcbFunctionDefineDbTraitArea,
-		DcbFunctionModifyDbTraitArea,
+	case DcbFunctionModifyDbTraitArea,
 		DcbFunctionDeleteAllDbAreas,
 		DcbFunctionDeleteOneDbArea:
 		p.previewArea.SetSystemResponse("")
@@ -1088,6 +1109,166 @@ func (p *ASDEXPane) toggleDataBlocksOnOff() {
 	p.previewArea.SetSystemResponse("")
 }
 
+func (p *ASDEXPane) activateDefineTraitAreaDcbHit(hit DcbHit) bool {
+	if p == nil {
+		return false
+	}
+
+	switch hit.Function {
+	case DcbFunctionDbFullPart:
+		return p.updateSelectedDataBlockAreaTraits(func(t *DataBlockAreaTraits) {
+			t.FullDataBlocks = !t.FullDataBlocks
+		})
+	case DcbFunctionDbAltitudeOnOff:
+		return p.updateSelectedDataBlockAreaTraits(func(t *DataBlockAreaTraits) {
+			t.ShowAltitude = !t.ShowAltitude
+		})
+	case DcbFunctionDbTypeOnOff:
+		return p.updateSelectedDataBlockAreaTraits(func(t *DataBlockAreaTraits) {
+			t.ShowTargetType = !t.ShowTargetType
+		})
+	case DcbFunctionDbSensorsOnOff:
+		return p.updateSelectedDataBlockAreaTraits(func(t *DataBlockAreaTraits) {
+			t.ShowSensors = !t.ShowSensors
+		})
+	case DcbFunctionDbCategoryOnOff:
+		return p.updateSelectedDataBlockAreaTraits(func(t *DataBlockAreaTraits) {
+			t.ShowCWT = !t.ShowCWT
+		})
+	case DcbFunctionDbFixOnOff:
+		return p.updateSelectedDataBlockAreaTraits(func(t *DataBlockAreaTraits) {
+			t.ShowFix = !t.ShowFix
+		})
+	case DcbFunctionDbVelocityOnOff:
+		return p.updateSelectedDataBlockAreaTraits(func(t *DataBlockAreaTraits) {
+			t.ShowVelocity = !t.ShowVelocity
+		})
+	case DcbFunctionDbScratchpadOnOff:
+		return p.updateSelectedDataBlockAreaTraits(func(t *DataBlockAreaTraits) {
+			t.ShowScratchpads = !t.ShowScratchpads
+		})
+	case DcbFunctionDbAreaVectorOnOff:
+		return p.updateSelectedDataBlockAreaTraits(func(t *DataBlockAreaTraits) {
+			t.ShowVector = !t.ShowVector
+		})
+	case DcbFunctionDbAreaDataBlockCharSize,
+		DcbFunctionDbAreaDataBlockBrightness,
+		DcbFunctionDbAreaLeaderLength,
+		DcbFunctionDbAreaLeaderDirection:
+		p.startDbAreaValueSpinner(hit.Function)
+		return true
+	}
+	return false
+}
+
+func (p *ASDEXPane) updateSelectedDataBlockAreaTraits(
+	update func(*DataBlockAreaTraits),
+) bool {
+	if p == nil || update == nil {
+		return false
+	}
+
+	state := p.displayStateForWindow(p.activeWindowID())
+	area, ok := state.selectedDataBlockArea()
+	if !ok || area.Traits.DataBlocksOff {
+		p.previewArea.SetSystemResponse("")
+		return false
+	}
+
+	update(&area.Traits)
+	p.previewArea.SetSystemResponse("")
+	return true
+}
+
+func (p *ASDEXPane) updateDataBlockAreaTraitsByID(
+	windowID ScopeWindowID,
+	areaID string,
+	update func(*DataBlockAreaTraits),
+) bool {
+	if p == nil || areaID == "" || update == nil {
+		return false
+	}
+
+	state := p.displayStateForWindow(windowID)
+	for i := range state.DataBlockAreas {
+		area := &state.DataBlockAreas[i]
+		if area.ID != areaID || area.Traits.DataBlocksOff {
+			continue
+		}
+
+		update(&area.Traits)
+		return true
+	}
+	return false
+}
+
+func (p *ASDEXPane) startDbAreaValueSpinner(function DcbFunction) {
+	if p == nil {
+		return
+	}
+
+	windowID := p.activeWindowID()
+	state := p.displayStateForWindow(windowID)
+	area, ok := state.selectedDataBlockArea()
+	if !ok || area.Traits.DataBlocksOff {
+		p.previewArea.SetSystemResponse("")
+		return
+	}
+
+	spinnerType := DcbSpinnerNone
+	title := ""
+	minValue := 1
+	maxValue := 99
+	currentValue := 0
+
+	switch function {
+	case DcbFunctionDbAreaDataBlockCharSize:
+		spinnerType = DcbSpinnerDbAreaCharSize
+		title = "DB SIZE"
+		minValue = 1
+		maxValue = 6
+		currentValue = area.Traits.FontSize
+	case DcbFunctionDbAreaDataBlockBrightness:
+		spinnerType = DcbSpinnerDbAreaBrightness
+		title = "DB BRITE"
+		minValue = brightnessMin
+		maxValue = brightnessMax
+		currentValue = area.Traits.Brightness
+	case DcbFunctionDbAreaLeaderLength:
+		spinnerType = DcbSpinnerDbAreaLeaderLength
+		title = "LDR LNG"
+		minValue = leaderLengthMin
+		maxValue = leaderLengthMax
+		currentValue = area.Traits.LeaderLength
+	case DcbFunctionDbAreaLeaderDirection:
+		spinnerType = DcbSpinnerDbAreaLeaderDirection
+		title = "LDR DIR"
+		minValue = 1
+		maxValue = 9
+		value, err := strconv.Atoi(leaderDirectionDisplayValue(area.Traits.LeaderDirection))
+		if err != nil {
+			value = 9
+		}
+		currentValue = value
+	default:
+		return
+	}
+
+	p.dcbSpinner = NewDbAreaDcbSpinner(
+		spinnerType,
+		function,
+		windowID,
+		area.ID,
+		title,
+		minValue,
+		maxValue,
+		currentValue,
+	)
+	p.dcbMenuCommand = nil
+	p.previewArea.SetSystemResponse("")
+	p.clearHighlightedTarget()
+}
+
 func (p *ASDEXPane) startRangeSpinner() {
 	if p == nil {
 		return
@@ -1152,6 +1333,9 @@ func (p *ASDEXPane) cancelDcbSpinner() {
 	if p == nil {
 		return
 	}
+	if p.dcbSpinner != nil && p.dcbSpinner.Type != DcbSpinnerRange {
+		p.dcbMenuCommand = NewDcbMenuCommand("DB AREA", "DEFINE TRAIT AREA")
+	}
 	p.dcbSpinner = nil
 	p.previewArea.SetSystemResponse("")
 }
@@ -1179,6 +1363,53 @@ func (p *ASDEXPane) commitDcbSpinner() {
 
 		p.setRangeSettingForWindow(spinner.WindowID, value)
 		p.dcbSpinner = nil
+		p.previewArea.SetSystemResponse("")
+		return
+	case DcbSpinnerDbAreaCharSize,
+		DcbSpinnerDbAreaBrightness,
+		DcbSpinnerDbAreaLeaderLength,
+		DcbSpinnerDbAreaLeaderDirection:
+		if strings.TrimSpace(spinner.InputText()) == "" {
+			p.dcbSpinner = nil
+			p.dcbMenuCommand = NewDcbMenuCommand("DB AREA", "DEFINE TRAIT AREA")
+			p.previewArea.SetSystemResponse("")
+			return
+		}
+
+		value, ok := spinner.ParsedValue()
+		if !ok {
+			p.dcbSpinner = nil
+			p.dcbMenuCommand = NewDcbMenuCommand("DB AREA", "DEFINE TRAIT AREA")
+			p.previewArea.SetSystemResponse("INVALID ENTRY")
+			return
+		}
+
+		if spinner.Type == DcbSpinnerDbAreaLeaderDirection {
+			direction, ok := leaderDirectionFromDisplayValue(value)
+			if !ok {
+				p.dcbSpinner = nil
+				p.dcbMenuCommand = NewDcbMenuCommand("DB AREA", "DEFINE TRAIT AREA")
+				p.previewArea.SetSystemResponse("INVALID ENTRY")
+				return
+			}
+			p.updateDataBlockAreaTraitsByID(spinner.WindowID, spinner.AreaID, func(t *DataBlockAreaTraits) {
+				t.LeaderDirection = direction
+			})
+		} else {
+			p.updateDataBlockAreaTraitsByID(spinner.WindowID, spinner.AreaID, func(t *DataBlockAreaTraits) {
+				switch spinner.Type {
+				case DcbSpinnerDbAreaCharSize:
+					t.FontSize = value
+				case DcbSpinnerDbAreaBrightness:
+					t.Brightness = value
+				case DcbSpinnerDbAreaLeaderLength:
+					t.LeaderLength = value
+				}
+			})
+		}
+
+		p.dcbSpinner = nil
+		p.dcbMenuCommand = NewDcbMenuCommand("DB AREA", "DEFINE TRAIT AREA")
 		p.previewArea.SetSystemResponse("")
 		return
 	default:
