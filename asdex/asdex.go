@@ -278,13 +278,8 @@ func (p *ASDEXPane) Draw(ctx *panes.Context, zcb *renderer.ZCmdBuffer) {
 		return
 	}
 
-	paneExtent := redsmath.RectFromSize(ctx.PaneRect.Width(), ctx.PaneRect.Height())
-	transforms := radar.GetScopeTransformations(
-		paneExtent,
-		p.center,
-		p.rangeFeet,
-		p.rotation,
-	)
+	referenceExtent := mainReferenceExtent(ctx.PaneSize())
+	transforms := scopeTransformForWindow(referenceExtent, referenceExtent, p.mainScopeView())
 
 	now := time.Now().UTC()
 	p.expireTemporaryBeaconDisplays(now)
@@ -321,6 +316,7 @@ func (p *ASDEXPane) Draw(ctx *panes.Context, zcb *renderer.ZCmdBuffer) {
 		if p.consumeMapRepositionMouse(ctx, transforms) {
 			transforms = scopeTransformForWindow(
 				redsmath.RectFromSize(ctx.PaneSize().X, ctx.PaneSize().Y),
+				referenceExtent,
 				p.mainScopeView(),
 			)
 		}
@@ -350,6 +346,7 @@ func (p *ASDEXPane) Draw(ctx *panes.Context, zcb *renderer.ZCmdBuffer) {
 		if !p.consumeDcbOnOffClick(ctx) && p.consumeDcbSpinnerInput(ctx) {
 			transforms = scopeTransformForWindow(
 				redsmath.RectFromSize(ctx.PaneSize().X, ctx.PaneSize().Y),
+				referenceExtent,
 				p.mainScopeView(),
 			)
 		}
@@ -366,12 +363,12 @@ func (p *ASDEXPane) Draw(ctx *panes.Context, zcb *renderer.ZCmdBuffer) {
 			} else {
 				windowID, windowRect, view, ok := p.scopeWindowAtPoint(ctx.Mouse.Pos, ctx.PaneSize())
 				if ok {
-					scopeTransforms := scopeTransformForWindow(windowRect, view)
+					scopeTransforms := scopeTransformForWindow(windowRect, referenceExtent, view)
 					updatedView, changed := p.consumeScopeMouseEvents(ctx, windowRect, view, scopeTransforms)
 					if changed {
 						p.setScopeView(windowID, updatedView)
 						view = updatedView
-						scopeTransforms = scopeTransformForWindow(windowRect, view)
+						scopeTransforms = scopeTransformForWindow(windowRect, referenceExtent, view)
 						if windowID == mainScopeWindowID {
 							transforms = scopeTransforms
 						}
@@ -391,7 +388,7 @@ func (p *ASDEXPane) Draw(ctx *panes.Context, zcb *renderer.ZCmdBuffer) {
 	}
 	if p.tempDataSelectMode != TempDataSelectNone && ctx.Mouse != nil {
 		if _, windowRect, view, ok := p.scopeWindowAtPoint(ctx.Mouse.Pos, ctx.PaneSize()); ok {
-			scopeTransforms := scopeTransformForWindow(windowRect, view)
+			scopeTransforms := scopeTransformForWindow(windowRect, referenceExtent, view)
 			p.hoveredTempData = p.tempData.HitTest(
 				scopeTransforms.WorldFromWindowP(ctx.Mouse.Pos.Sub(windowRect.Min)),
 			)
@@ -407,12 +404,12 @@ func (p *ASDEXPane) Draw(ctx *panes.Context, zcb *renderer.ZCmdBuffer) {
 	p.safetyLogic.Update(targets)
 
 	mainRect := redsmath.RectFromSize(ctx.PaneSize().X, ctx.PaneSize().Y)
-	transforms = p.renderScopeWindow(ctx, zcb, 0, mainScopeWindowID, mainRect, p.mainScopeView(), targets, now, true)
+	transforms = p.renderScopeWindow(ctx, zcb, 0, mainScopeWindowID, mainRect, referenceExtent, p.mainScopeView(), targets, now, true)
 	for i, win := range p.windows.secondary {
 		if win.Hidden {
 			continue
 		}
-		p.renderScopeWindow(ctx, zcb, i+1, win.ID, win.Rect, win.View, targets, now, false)
+		p.renderScopeWindow(ctx, zcb, i+1, win.ID, win.Rect, referenceExtent, win.View, targets, now, false)
 	}
 	p.renderWindowBorders(ctx, zcb, transforms)
 	p.renderNewWindowPreview(ctx, zcb, transforms)
@@ -484,6 +481,7 @@ func (p *ASDEXPane) renderScopeWindow(
 	stackIndex int,
 	windowID ScopeWindowID,
 	rect redsmath.Rect,
+	referenceExtent redsmath.Rect,
 	view ScopeView,
 	targets []*Target,
 	now time.Time,
@@ -493,7 +491,7 @@ func (p *ASDEXPane) renderScopeWindow(
 		return radar.ScopeTransformations{}
 	}
 
-	transforms := scopeTransformForWindow(rect, view)
+	transforms := scopeTransformForWindow(rect, referenceExtent, view)
 	x, y, w, h := scopeFramebufferRect(ctx, rect)
 
 	cb := zcb.At(scopeWindowZ(stackIndex, zVideoMap))
@@ -2077,7 +2075,7 @@ func (p *ASDEXPane) consumeMapRepositionMouse(
 	if !ok {
 		view = p.mainScopeView()
 	}
-	transforms = scopeTransformForWindow(rect, view)
+	transforms = scopeTransformForWindow(rect, mainReferenceExtent(ctx.PaneSize()), view)
 
 	center := mapRepositionCursorCenter(rect)
 	delta := mouse.Pos.Sub(center)

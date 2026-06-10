@@ -11,8 +11,10 @@ import (
 type ScopeView struct {
 	Center       redsmath.Vec2
 	RangeSetting int
-	RangeFeet    float32
-	Rotation     float32
+	// RangeFeet is the CRC ASDE-X range scale: RangeSetting * 100. It is
+	// converted to an effective visible half-height by the scope transform.
+	RangeFeet float32
+	Rotation  float32
 }
 
 type ScopeWindowID int
@@ -291,9 +293,18 @@ func (p *ASDEXPane) scopeWindowAtPoint(
 	return 0, redsmath.Rect{}, ScopeView{}, false
 }
 
-func scopeTransformForWindow(rect redsmath.Rect, view ScopeView) radar.ScopeTransformations {
-	return radar.GetScopeTransformations(
+func mainReferenceExtent(paneSize redsmath.Vec2) redsmath.Rect {
+	return redsmath.RectFromSize(paneSize.X, paneSize.Y)
+}
+
+func scopeTransformForWindow(
+	rect redsmath.Rect,
+	referenceExtent redsmath.Rect,
+	view ScopeView,
+) radar.ScopeTransformations {
+	return radar.GetScopeTransformationsWithReference(
 		redsmath.RectFromSize(rect.Width(), rect.Height()),
+		referenceExtent,
 		view.Center,
 		view.RangeFeet,
 		view.Rotation,
