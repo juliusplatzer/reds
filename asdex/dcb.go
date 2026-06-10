@@ -536,12 +536,6 @@ func isLargeDcbFunction(function DcbFunction) bool {
 		DcbFunctionHideTempData,
 		DcbFunctionDeleteGlobalTempData,
 		DcbFunctionDbFullPart,
-		DcbFunctionDbAltitudeOnOff,
-		DcbFunctionDbTypeOnOff,
-		DcbFunctionDbSensorsOnOff,
-		DcbFunctionDbCategoryOnOff,
-		DcbFunctionDbFixOnOff,
-		DcbFunctionDbVelocityOnOff,
 		DcbFunctionDbScratchpadOnOff,
 		DcbFunctionDone,
 		DcbFunctionVacant:
