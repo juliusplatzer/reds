@@ -45,6 +45,8 @@ const (
 	asdexMaxRangeSetting     = 600
 	asdexDefaultRangeSetting = 100
 	asdexFeetPerRangeUnit    = 100
+	asdexVirtualPanelWidth   = 1600
+	asdexVirtualPanelHeight  = 1200
 )
 
 const (
@@ -4078,11 +4080,17 @@ func (p *ASDEXPane) initView(rect redsmath.Rect) {
 		return
 	}
 
+	paneW := rect.Width()
+	paneH := rect.Height()
+	if paneW <= 0 || paneH <= 0 {
+		return
+	}
+
 	const margin = float32(1.08)
 
-	aspect := rect.Width() / rect.Height()
-	rangeFromWidth := width * margin
-	rangeFromHeight := height * margin * aspect
+	refWidth := float32(asdexVirtualPanelWidth)
+	rangeFromWidth := width * margin * refWidth / paneW
+	rangeFromHeight := height * margin * refWidth / paneH
 
 	fitFullHorizontalFeet := rangeFromWidth
 	if rangeFromHeight > fitFullHorizontalFeet {
