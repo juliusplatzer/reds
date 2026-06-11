@@ -121,6 +121,7 @@ type ASDEXPane struct {
 	newWindow                 *NewWindowCommand
 	deleteWindow              *DeleteWindowCommand
 	windowReposition          *WindowRepositionCommand
+	resizeWindow              *ResizeWindowCommand
 	showCoastList             bool
 	hoveredCoastListTarget    string
 
@@ -307,7 +308,7 @@ func (p *ASDEXPane) Draw(ctx *panes.Context, zcb *renderer.ZCmdBuffer) {
 	if p.mapReposition == nil && !p.listRepositionActive() && p.dbAreaDraft == nil && p.dbAreaSelection == nil &&
 		p.tempAreaDraft == nil && p.tempTextCommand == nil && p.tempTextPlacement == nil &&
 		p.tempDataSelectMode == TempDataSelectNone && p.newWindow == nil && p.deleteWindow == nil &&
-		p.windowReposition == nil {
+		p.windowReposition == nil && p.resizeWindow == nil {
 		p.updateCoastListHover(ctx)
 	} else {
 		p.hoveredCoastListTarget = ""
@@ -315,7 +316,7 @@ func (p *ASDEXPane) Draw(ctx *panes.Context, zcb *renderer.ZCmdBuffer) {
 	if p.mapReposition == nil && p.dbAreaDraft == nil && p.dbAreaSelection == nil && p.tempAreaDraft == nil &&
 		p.tempTextCommand == nil && p.tempTextPlacement == nil &&
 		p.tempDataSelectMode == TempDataSelectNone && p.newWindow == nil && p.deleteWindow == nil &&
-		p.windowReposition == nil {
+		p.windowReposition == nil && p.resizeWindow == nil {
 		p.updateRightClickGesture(ctx)
 	} else {
 		p.clearRightClickGesture()
@@ -349,6 +350,9 @@ func (p *ASDEXPane) Draw(ctx *panes.Context, zcb *renderer.ZCmdBuffer) {
 	} else if p.windowReposition != nil {
 		p.clearHighlightedTarget()
 		p.consumeWindowRepositionInput(ctx)
+	} else if p.resizeWindow != nil {
+		p.clearHighlightedTarget()
+		p.consumeResizeWindowInput(ctx, referenceExtent)
 	} else if p.tempTextPlacement != nil {
 		p.clearHighlightedTarget()
 		p.consumeTempTextPlacementInput(ctx, transforms)
@@ -479,6 +483,7 @@ func (p *ASDEXPane) Draw(ctx *panes.Context, zcb *renderer.ZCmdBuffer) {
 	p.renderWindowBorders(ctx, zcb, transforms)
 	p.renderNewWindowPreview(ctx, zcb, transforms)
 	p.renderWindowRepositionPreview(ctx, zcb, transforms)
+	p.renderResizeWindowPreview(ctx, zcb, transforms)
 
 	x, y, w, h := ctx.PaneFramebufferRect()
 	alertCB := zcb.At(windowZ(0, zAlertMessage))
@@ -806,7 +811,7 @@ func (p *ASDEXPane) dcbCursorUnlocked() bool {
 	}
 	if p.dbAreaDraft != nil || p.tempAreaDraft != nil || p.tempTextCommand != nil || p.tempTextPlacement != nil ||
 		p.tempDataSelectMode != TempDataSelectNone || p.newWindow != nil || p.deleteWindow != nil ||
-		p.windowReposition != nil {
+		p.windowReposition != nil || p.resizeWindow != nil {
 		return false
 	}
 	if p.dcbSpinner != nil || p.dcbMenuCommand != nil {
@@ -855,6 +860,8 @@ func (p *ASDEXPane) dcbState() DcbState {
 		activeSpinnerFunction = DcbFunctionDeleteWindow
 	} else if p.windowReposition != nil {
 		activeSpinnerFunction = DcbFunctionWindowReposition
+	} else if p.resizeWindow != nil {
+		activeSpinnerFunction = DcbFunctionResizeWindow
 	}
 	fields := p.dbFieldSettings
 
@@ -1030,6 +1037,11 @@ func (p *ASDEXPane) activateDcbHit(ctx *panes.Context, hit DcbHit) bool {
 			p.startWindowRepositionCommand(ctx)
 		}
 		return true
+	case DcbFunctionResizeWindow:
+		if p.dcb.Menu() == DcbMenuTools {
+			p.startResizeWindowCommand()
+		}
+		return true
 	case DcbFunctionDefineDbTraitArea:
 		p.startDefineDbTraitArea()
 		return true
@@ -1100,6 +1112,7 @@ func (p *ASDEXPane) activateDcbHit(ctx *panes.Context, hit DcbHit) bool {
 		p.newWindow = nil
 		p.deleteWindow = nil
 		p.windowReposition = nil
+		p.resizeWindow = nil
 		p.previewArea.SetSystemResponse("")
 		p.clearHighlightedTarget()
 		return true
@@ -1136,6 +1149,7 @@ func (p *ASDEXPane) clearDcbModalConflicts() {
 	p.newWindow = nil
 	p.deleteWindow = nil
 	p.windowReposition = nil
+	p.resizeWindow = nil
 }
 
 func (p *ASDEXPane) openDbEditDcbMenu() {
@@ -1379,13 +1393,33 @@ func (p *ASDEXPane) startWindowRepositionCommand(ctx *panes.Context) {
 	p.clearHighlightedTarget()
 }
 
+func (p *ASDEXPane) startResizeWindowCommand() {
+	if p == nil {
+		return
+	}
+
+	windowID := p.activeWindowID()
+	if windowID == mainScopeWindowID {
+		return
+	}
+	if _, ok := p.scopeViewForWindow(windowID); !ok {
+		return
+	}
+
+	p.clearDcbModalConflicts()
+	p.dcb.SetMenu(DcbMenuTools)
+	p.dcbMenuCommand = nil
+	p.resizeWindow = NewResizeWindowCommand(windowID)
+	p.previewArea.SetSystemResponse("")
+	p.clearHighlightedTarget()
+}
+
 func isToolsPlaceholderFunction(function DcbFunction) bool {
 	switch function {
 	case DcbFunctionRange,
 		DcbFunctionMapReposition,
 		DcbFunctionRotate,
 		DcbFunctionNewWindow,
-		DcbFunctionResizeWindow,
 		DcbFunctionHistoryOnOff,
 		DcbFunctionHistory,
 		DcbFunctionCoastOnOff,
@@ -1654,6 +1688,7 @@ func (p *ASDEXPane) startRangeSpinner() {
 	p.newWindow = nil
 	p.deleteWindow = nil
 	p.windowReposition = nil
+	p.resizeWindow = nil
 	p.commandEntry.Clear()
 	p.dcbSpinner = NewRangeDcbSpinner(windowID, currentRange)
 	p.previewArea.SetSystemResponse("")
@@ -2640,6 +2675,9 @@ func (p *ASDEXPane) resolveCursorMode(ctx *panes.Context) CursorMode {
 	if p != nil && p.windowReposition != nil {
 		return CursorModeMove
 	}
+	if p != nil && p.resizeWindow != nil {
+		return p.resizeWindowCursorMode(ctx)
+	}
 	if p != nil && p.tempDataSelectMode != TempDataSelectNone {
 		if p.hoveredTempData.Type != TempDataHitNone {
 			return CursorModeSelect
@@ -2664,6 +2702,28 @@ func (p *ASDEXPane) resolveCursorMode(ctx *panes.Context) CursorMode {
 		}
 	}
 	return CursorModeScope
+}
+
+func (p *ASDEXPane) resizeWindowCursorMode(ctx *panes.Context) CursorMode {
+	if p == nil || p.resizeWindow == nil || ctx == nil || ctx.Mouse == nil {
+		return CursorModeScope
+	}
+
+	cmd := p.resizeWindow
+	if cmd.HasOperation {
+		return cursorModeForResizeOperation(cmd.Operation)
+	}
+
+	rect, ok := p.scopeWindowRectForWindow(cmd.WindowID, ctx.PaneSize())
+	if !ok {
+		return CursorModeScope
+	}
+
+	op, ok := resizeOperationAtPoint(ctx.Mouse.Pos, rect)
+	if !ok {
+		return CursorModeScope
+	}
+	return cursorModeForResizeOperation(op)
 }
 
 func (p *ASDEXPane) applyCursorMode(ctx *panes.Context, mode CursorMode) {
@@ -2789,6 +2849,9 @@ func (p *ASDEXPane) activeCommandLines() []string {
 	if p.windowReposition != nil {
 		return p.windowReposition.DisplayLines()
 	}
+	if p.resizeWindow != nil {
+		return p.resizeWindow.DisplayLines()
+	}
 	if p.tempTextCommand != nil {
 		return p.tempTextCommand.DisplayLines()
 	}
@@ -2883,6 +2946,7 @@ func (p *ASDEXPane) cancelActiveCommand() {
 	p.newWindow = nil
 	p.deleteWindow = nil
 	p.windowReposition = nil
+	p.resizeWindow = nil
 	p.dcb.ReturnToMainMenu()
 	p.commandEntry.Clear()
 	p.previewArea.SetSystemResponse("")
@@ -2924,6 +2988,9 @@ func (p *ASDEXPane) consumeCommandKeyboard(ctx *panes.Context) bool {
 	}
 	if p.windowReposition != nil {
 		return p.handleWindowRepositionKeyboard(ctx)
+	}
+	if p.resizeWindow != nil {
+		return p.handleResizeWindowKeyboard(ctx)
 	}
 	if p.dbAreaDraft != nil {
 		return p.handleDataBlockAreaDraftKeyboard(ctx)
@@ -3139,6 +3206,7 @@ func (p *ASDEXPane) startMultiPreviewReposition() {
 	p.newWindow = nil
 	p.deleteWindow = nil
 	p.windowReposition = nil
+	p.resizeWindow = nil
 	p.commandEntry.Clear()
 	p.previewArea.SetSystemResponse("")
 	p.clearHighlightedTarget()
@@ -3166,6 +3234,7 @@ func (p *ASDEXPane) startMultiCoastListReposition() {
 	p.newWindow = nil
 	p.deleteWindow = nil
 	p.windowReposition = nil
+	p.resizeWindow = nil
 	p.commandEntry.Clear()
 	p.previewArea.SetSystemResponse("")
 	p.clearHighlightedTarget()

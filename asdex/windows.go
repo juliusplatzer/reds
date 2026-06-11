@@ -114,6 +114,29 @@ type NewWindowCommand struct {
 
 type DeleteWindowCommand struct{}
 
+type ResizeOperation int
+
+const (
+	ResizeTopLeft ResizeOperation = iota
+	ResizeTop
+	ResizeTopRight
+	ResizeRight
+	ResizeBottomRight
+	ResizeBottom
+	ResizeBottomLeft
+	ResizeLeft
+)
+
+type ResizeWindowCommand struct {
+	WindowID ScopeWindowID
+
+	Operation    ResizeOperation
+	HasOperation bool
+
+	Point    redsmath.Vec2
+	HasPoint bool
+}
+
 type WindowRepositionCommand struct {
 	WindowID ScopeWindowID
 
@@ -127,6 +150,7 @@ const (
 	mainWindowBorderWidth      = float32(2)
 	secondaryWindowBorderWidth = float32(4)
 	proposedWindowBorderWidth  = float32(4)
+	resizeHoverRange           = float32(10)
 
 	windowOverlapPadding = float32(4)
 
@@ -167,6 +191,40 @@ func (cmd *DeleteWindowCommand) DisplayLines() []string {
 		return nil
 	}
 	return []string{"TOOLS", "DELETE WINDOW"}
+}
+
+func (op ResizeOperation) IsCorner() bool {
+	return op == ResizeTopLeft ||
+		op == ResizeTopRight ||
+		op == ResizeBottomRight ||
+		op == ResizeBottomLeft
+}
+
+func (op ResizeOperation) IsVertical() bool {
+	return op == ResizeTop || op == ResizeBottom
+}
+
+func (op ResizeOperation) IsHorizontal() bool {
+	return op == ResizeLeft || op == ResizeRight
+}
+
+func (op ResizeOperation) IsPositiveDirection() bool {
+	return op == ResizeTopRight ||
+		op == ResizeRight ||
+		op == ResizeBottomRight ||
+		op == ResizeBottom ||
+		op == ResizeBottomLeft
+}
+
+func NewResizeWindowCommand(windowID ScopeWindowID) *ResizeWindowCommand {
+	return &ResizeWindowCommand{WindowID: windowID}
+}
+
+func (cmd *ResizeWindowCommand) DisplayLines() []string {
+	if cmd == nil {
+		return nil
+	}
+	return []string{"TOOLS", "RESIZE WINDOW"}
 }
 
 func NewWindowRepositionCommand(
@@ -302,6 +360,46 @@ func (wm *ScopeWindowManager) ProposedSecondaryMoveIsValid(
 }
 
 func (wm *ScopeWindowManager) MoveSecondary(id ScopeWindowID, rect redsmath.Rect) bool {
+	if wm == nil || id == mainScopeWindowID || rect.Empty() {
+		return false
+	}
+
+	for i := range wm.secondary {
+		if wm.secondary[i].Hidden || wm.secondary[i].ID != id {
+			continue
+		}
+
+		wm.secondary[i].Rect = rect
+		return true
+	}
+	return false
+}
+
+func (wm *ScopeWindowManager) ProposedSecondaryResizeIsValid(
+	id ScopeWindowID,
+	rect redsmath.Rect,
+	paneSize redsmath.Vec2,
+) bool {
+	if wm == nil || id == mainScopeWindowID || rect.Empty() {
+		return false
+	}
+	if rect.Min.X < 4 || rect.Min.Y < 4 || rect.Max.X > paneSize.X-4 || rect.Max.Y > paneSize.Y-4 {
+		return false
+	}
+
+	proposed := inflateRect(rect, windowOverlapPadding)
+	for _, win := range wm.secondary {
+		if win.Hidden || win.ID == id {
+			continue
+		}
+		if rectsIntersect(proposed, inflateRect(win.Rect, windowOverlapPadding)) {
+			return false
+		}
+	}
+	return true
+}
+
+func (wm *ScopeWindowManager) ResizeSecondary(id ScopeWindowID, rect redsmath.Rect) bool {
 	if wm == nil || id == mainScopeWindowID || rect.Empty() {
 		return false
 	}
@@ -655,6 +753,121 @@ func (p *ASDEXPane) cancelWindowRepositionCommand() {
 	p.finishWindowRepositionCommand("")
 }
 
+func (p *ASDEXPane) consumeResizeWindowInput(
+	ctx *panes.Context,
+	referenceExtent redsmath.Rect,
+) bool {
+	if p == nil || p.resizeWindow == nil || ctx == nil || ctx.Mouse == nil {
+		return false
+	}
+
+	cmd := p.resizeWindow
+	paneSize := ctx.PaneSize()
+	rect, ok := p.scopeWindowRectForWindow(cmd.WindowID, paneSize)
+	if !ok || cmd.WindowID == mainScopeWindowID {
+		p.finishResizeWindowCommand("")
+		return true
+	}
+
+	mouse := ctx.Mouse
+	if !cmd.HasOperation {
+		if mouse.WasPressed(platform.MouseButtonLeft) {
+			op, ok := resizeOperationAtPoint(mouse.Pos, rect)
+			if ok {
+				cmd.Operation = op
+				cmd.HasOperation = true
+				cmd.Point = mouse.Pos
+				cmd.HasPoint = true
+			}
+			return true
+		}
+		return true
+	}
+
+	candidate := resizeWindowRect(rect, mouse.Pos, cmd.Operation)
+	if p.windows.ProposedSecondaryResizeIsValid(cmd.WindowID, candidate, paneSize) {
+		cmd.Point = mouse.Pos
+		cmd.HasPoint = true
+	}
+
+	if mouse.WasPressed(platform.MouseButtonLeft) {
+		if cmd.HasPoint {
+			finalRect := resizeWindowRect(rect, cmd.Point, cmd.Operation)
+			if p.windows.ProposedSecondaryResizeIsValid(cmd.WindowID, finalRect, paneSize) {
+				p.resizeSecondaryWindow(cmd.WindowID, finalRect, cmd.Operation, paneSize, referenceExtent)
+			}
+		}
+		p.finishResizeWindowCommand("")
+		return true
+	}
+
+	return true
+}
+
+func (p *ASDEXPane) resizeSecondaryWindow(
+	id ScopeWindowID,
+	newRect redsmath.Rect,
+	op ResizeOperation,
+	paneSize redsmath.Vec2,
+	referenceExtent redsmath.Rect,
+) bool {
+	if p == nil || id == mainScopeWindowID || newRect.Empty() {
+		return false
+	}
+
+	oldRect, ok := p.scopeWindowRectForWindow(id, paneSize)
+	if !ok {
+		return false
+	}
+	view, ok := p.scopeViewForWindow(id)
+	if !ok {
+		return false
+	}
+
+	oldSize := oldRect.Size()
+	newSize := newRect.Size()
+	var anchor redsmath.Vec2
+	if op.IsPositiveDirection() {
+		anchor = newSize.Mul(0.5)
+	} else {
+		anchor = oldSize.Mul(0.5).Sub(newSize.Sub(oldSize).Mul(0.5))
+	}
+
+	oldTransforms := scopeTransformForWindow(
+		redsmath.RectFromSize(oldRect.Width(), oldRect.Height()),
+		referenceExtent,
+		view,
+	)
+	view.Center = oldTransforms.WorldFromWindowP(anchor)
+
+	if !p.windows.ResizeSecondary(id, newRect) {
+		return false
+	}
+
+	p.setScopeView(id, view)
+	return true
+}
+
+func (p *ASDEXPane) finishResizeWindowCommand(response string) {
+	if p == nil {
+		return
+	}
+
+	p.resizeWindow = nil
+	p.dcb.SetMenu(DcbMenuTools)
+	p.dcbMenuCommand = NewDcbMenuCommand("TOOLS")
+	p.previewArea.SetSystemResponse(response)
+	p.clearHighlightedTarget()
+}
+
+func (p *ASDEXPane) cancelResizeWindowCommand() {
+	if p == nil {
+		return
+	}
+
+	p.finishResizeWindowCommand("")
+}
+
 func (p *ASDEXPane) maybeActivateScopeWindowOnLeftPress(ctx *panes.Context) {
 	if p == nil || ctx == nil || ctx.Mouse == nil {
 		return
@@ -668,6 +881,7 @@ func (p *ASDEXPane) maybeActivateScopeWindowOnLeftPress(ctx *panes.Context) {
 		p.newWindow != nil ||
 		p.deleteWindow != nil ||
 		p.windowReposition != nil ||
+		p.resizeWindow != nil ||
 		p.mapReposition != nil ||
 		p.mapRotate != nil ||
 		p.listRepositionActive() ||
@@ -729,6 +943,21 @@ func (p *ASDEXPane) handleWindowRepositionKeyboard(ctx *panes.Context) bool {
 		keyboard.WasPressed(platform.KeyBackspace) ||
 		keyboard.WasPressed(platform.KeyDelete) {
 		p.cancelWindowRepositionCommand()
+		return true
+	}
+	return false
+}
+
+func (p *ASDEXPane) handleResizeWindowKeyboard(ctx *panes.Context) bool {
+	if p == nil || p.resizeWindow == nil || ctx == nil || ctx.Keyboard == nil {
+		return false
+	}
+
+	keyboard := ctx.Keyboard
+	if keyboard.WasPressed(platform.KeyEscape) ||
+		keyboard.WasPressed(platform.KeyBackspace) ||
+		keyboard.WasPressed(platform.KeyDelete) {
+		p.cancelResizeWindowCommand()
 		return true
 	}
 	return false
@@ -863,6 +1092,46 @@ func (p *ASDEXPane) renderWindowRepositionPreview(
 	cb.DisableScissor()
 }
 
+func (p *ASDEXPane) renderResizeWindowPreview(
+	ctx *panes.Context,
+	zcb *renderer.ZCmdBuffer,
+	transforms radar.ScopeTransformations,
+) {
+	if p == nil || p.resizeWindow == nil || !p.resizeWindow.HasOperation ||
+		!p.resizeWindow.HasPoint || ctx == nil || zcb == nil {
+		return
+	}
+
+	rect, ok := p.scopeWindowRectForWindow(p.resizeWindow.WindowID, ctx.PaneSize())
+	if !ok {
+		return
+	}
+
+	proposed := resizeWindowRect(rect, p.resizeWindow.Point, p.resizeWindow.Operation)
+	if proposed.Empty() {
+		return
+	}
+
+	previewRect := windowResizePreviewRect(proposed)
+	x, y, w, h := ctx.PaneFramebufferRect()
+	cb := zcb.At(windowZ(0, zWindowBorders))
+	cb.Viewport(x, y, w, h)
+	cb.Scissor(x, y, w, h)
+	transforms.LoadWindowViewingMatrices(cb)
+
+	builder := renderer.GetColoredTrianglesBuilder()
+	defer renderer.ReturnColoredTrianglesBuilder(builder)
+
+	addWindowBorderRect(
+		builder,
+		previewRect,
+		proposedWindowBorderWidth,
+		applyBrightness(proposedWindowBorderRGB, brightnessDefault, brightnessFloorDefault),
+	)
+	builder.GenerateCommands(cb)
+	cb.DisableScissor()
+}
+
 func (p *ASDEXPane) consumeScopeMouseEvents(
 	ctx *panes.Context,
 	windowRect redsmath.Rect,
@@ -963,6 +1232,130 @@ func windowRepositionPreviewRect(
 		outerMin.X+size.X+4,
 		outerMin.Y+size.Y+4,
 	)
+}
+
+func resizeOperationAtPoint(
+	point redsmath.Vec2,
+	rect redsmath.Rect,
+) (ResizeOperation, bool) {
+	corners := []struct {
+		point redsmath.Vec2
+		op    ResizeOperation
+	}{
+		{redsmath.Vec2{X: rect.Min.X, Y: rect.Min.Y}, ResizeTopLeft},
+		{redsmath.Vec2{X: rect.Max.X, Y: rect.Min.Y}, ResizeTopRight},
+		{redsmath.Vec2{X: rect.Max.X, Y: rect.Max.Y}, ResizeBottomRight},
+		{redsmath.Vec2{X: rect.Min.X, Y: rect.Max.Y}, ResizeBottomLeft},
+	}
+
+	maxDistance2 := resizeHoverRange * resizeHoverRange
+	for _, corner := range corners {
+		if distance2(point, corner.point) < maxDistance2 {
+			return corner.op, true
+		}
+	}
+
+	if point.Y > rect.Min.Y-resizeHoverRange && point.Y < rect.Max.Y+resizeHoverRange {
+		if abs32(point.X-rect.Min.X) < resizeHoverRange {
+			return ResizeLeft, true
+		}
+		if abs32(point.X-rect.Max.X) < resizeHoverRange {
+			return ResizeRight, true
+		}
+	}
+
+	if point.X > rect.Min.X-resizeHoverRange && point.X < rect.Max.X+resizeHoverRange {
+		if abs32(point.Y-rect.Min.Y) < resizeHoverRange {
+			return ResizeTop, true
+		}
+		if abs32(point.Y-rect.Max.Y) < resizeHoverRange {
+			return ResizeBottom, true
+		}
+	}
+
+	return ResizeTopLeft, false
+}
+
+func resizeWindowRect(
+	rect redsmath.Rect,
+	point redsmath.Vec2,
+	op ResizeOperation,
+) redsmath.Rect {
+	switch op {
+	case ResizeTopLeft:
+		return normalizedRect(point, rect.Max)
+	case ResizeTop:
+		return normalizedRect(
+			redsmath.Vec2{X: rect.Min.X, Y: point.Y},
+			rect.Max,
+		)
+	case ResizeTopRight:
+		return normalizedRect(
+			redsmath.Vec2{X: rect.Min.X, Y: point.Y},
+			redsmath.Vec2{X: point.X, Y: rect.Max.Y},
+		)
+	case ResizeRight:
+		return normalizedRect(
+			rect.Min,
+			redsmath.Vec2{X: point.X, Y: rect.Max.Y},
+		)
+	case ResizeBottomRight:
+		return normalizedRect(rect.Min, point)
+	case ResizeBottom:
+		return normalizedRect(
+			rect.Min,
+			redsmath.Vec2{X: rect.Max.X, Y: point.Y},
+		)
+	case ResizeBottomLeft:
+		return normalizedRect(
+			redsmath.Vec2{X: point.X, Y: rect.Min.Y},
+			redsmath.Vec2{X: rect.Max.X, Y: point.Y},
+		)
+	case ResizeLeft:
+		return normalizedRect(
+			redsmath.Vec2{X: point.X, Y: rect.Min.Y},
+			rect.Max,
+		)
+	default:
+		return rect
+	}
+}
+
+func normalizedRect(a, b redsmath.Vec2) redsmath.Rect {
+	return redsmath.NewRect(
+		min32(a.X, b.X),
+		min32(a.Y, b.Y),
+		max32(a.X, b.X),
+		max32(a.Y, b.Y),
+	)
+}
+
+func windowResizePreviewRect(rect redsmath.Rect) redsmath.Rect {
+	return redsmath.NewRect(
+		rect.Min.X-2,
+		rect.Min.Y-2,
+		rect.Max.X+2,
+		rect.Max.Y+2,
+	)
+}
+
+func cursorModeForResizeOperation(op ResizeOperation) CursorMode {
+	switch {
+	case op.IsCorner():
+		return CursorModeMove
+	case op.IsVertical():
+		return CursorModeUpDown
+	case op.IsHorizontal():
+		return CursorModeLeftRight
+	default:
+		return CursorModeScope
+	}
+}
+
+func distance2(a, b redsmath.Vec2) float32 {
+	dx := a.X - b.X
+	dy := a.Y - b.Y
+	return dx*dx + dy*dy
 }
 
 func clampWindowRepositionOuterMin(
