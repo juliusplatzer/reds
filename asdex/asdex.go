@@ -1345,7 +1345,7 @@ func (p *ASDEXPane) activateTraitAreaDcbHit(hit DcbHit) bool {
 			t.ShowVector = !t.ShowVector
 		})
 	case DcbFunctionDbAreaDataBlockCharSize:
-		p.startDbAreaValueSpinner(hit.Function)
+		p.startDbAreaCharSizeSpinner()
 		return true
 	case DcbFunctionDbAreaDataBlockBrightness:
 		p.startDbAreaBrightnessSpinner()
@@ -1415,7 +1415,7 @@ func (p *ASDEXPane) selectedDbAreaForEdit() (ScopeWindowID, *WindowDisplayState,
 	return windowID, state, area, true
 }
 
-func (p *ASDEXPane) startDbAreaValueSpinner(function DcbFunction) {
+func (p *ASDEXPane) startDbAreaCharSizeSpinner() {
 	if p == nil {
 		return
 	}
@@ -1425,59 +1425,14 @@ func (p *ASDEXPane) startDbAreaValueSpinner(function DcbFunction) {
 		p.previewArea.SetSystemResponse("")
 		return
 	}
-	editMode := dbAreaEditModeForMenu(p.dcb.Menu())
 
-	spinnerType := DcbSpinnerNone
-	title := ""
-	minValue := 1
-	maxValue := 99
-	currentValue := 0
-
-	switch function {
-	case DcbFunctionDbAreaDataBlockCharSize:
-		spinnerType = DcbSpinnerDbAreaCharSize
-		title = "DB SIZE"
-		minValue = 1
-		maxValue = 6
-		currentValue = area.Traits.FontSize
-	case DcbFunctionDbAreaDataBlockBrightness:
-		spinnerType = DcbSpinnerDbAreaBrightness
-		title = "DB BRITE"
-		minValue = brightnessMin
-		maxValue = brightnessMax
-		currentValue = area.Traits.Brightness
-	case DcbFunctionDbAreaLeaderLength:
-		spinnerType = DcbSpinnerDbAreaLeaderLength
-		title = "LDR LNG"
-		minValue = leaderLengthMin
-		maxValue = leaderLengthMax
-		currentValue = area.Traits.LeaderLength
-	case DcbFunctionDbAreaLeaderDirection:
-		spinnerType = DcbSpinnerDbAreaLeaderDirection
-		title = "LDR DIR"
-		minValue = 1
-		maxValue = 9
-		value, err := strconv.Atoi(leaderDirectionDisplayValue(area.Traits.LeaderDirection))
-		if err != nil {
-			value = 9
-		}
-		currentValue = value
-	default:
-		return
-	}
-
-	p.dcbSpinner = NewDbAreaDcbSpinner(
-		spinnerType,
-		function,
-		windowID,
-		area.ID,
-		editMode,
-		title,
-		minValue,
-		maxValue,
-		currentValue,
-	)
+	returnMenu := p.dcb.Menu()
+	areaID := area.ID
+	current := area.Traits.FontSize
+	p.clearDcbModalConflicts()
+	p.dcb.SetMenu(returnMenu)
 	p.dcbMenuCommand = nil
+	p.dcbSpinner = NewDbAreaCharSizeSpinner(windowID, areaID, returnMenu, current)
 	p.previewArea.SetSystemResponse("")
 	p.clearHighlightedTarget()
 }
@@ -1679,27 +1634,7 @@ func (p *ASDEXPane) commitDcbSpinner() {
 		p.previewArea.SetSystemResponse("")
 		return
 	case DcbSpinnerDbAreaCharSize:
-		if strings.TrimSpace(spinner.InputText()) == "" {
-			p.restoreDbAreaEditCommand(spinner)
-			p.dcbSpinner = nil
-			p.previewArea.SetSystemResponse("")
-			return
-		}
-
-		value, ok := spinner.ParsedValue()
-		if !ok {
-			p.restoreDbAreaEditCommand(spinner)
-			p.dcbSpinner = nil
-			p.previewArea.SetSystemResponse("INVALID ENTRY")
-			return
-		}
-
-		p.updateDataBlockAreaTraitsByID(spinner.WindowID, spinner.AreaID, func(t *DataBlockAreaTraits) {
-			t.FontSize = value
-		})
-		p.restoreDbAreaEditCommand(spinner)
-		p.dcbSpinner = nil
-		p.previewArea.SetSystemResponse("")
+		p.commitDbAreaCharSizeSpinner(spinner)
 		return
 	case DcbSpinnerDbAreaBrightness:
 		p.commitDbAreaBrightnessSpinner(spinner)
@@ -1718,6 +1653,23 @@ func (p *ASDEXPane) commitDcbSpinner() {
 		p.previewArea.SetSystemResponse("INVALID ENTRY")
 		return
 	}
+}
+
+func (p *ASDEXPane) commitDbAreaCharSizeSpinner(spinner *DcbSpinner) {
+	text := strings.TrimSpace(spinner.InputText())
+	value, err := strconv.Atoi(text)
+	if err != nil || value < 1 || value > 6 {
+		p.finishDbAreaSpinner(spinner, "INVALID SIZE")
+		return
+	}
+
+	if p.updateDataBlockAreaTraitsByID(spinner.WindowID, spinner.AreaID, func(t *DataBlockAreaTraits) {
+		t.FontSize = value
+	}) {
+		p.finishDbAreaSpinner(spinner, "")
+		return
+	}
+	p.finishDbAreaSpinner(spinner, "INVALID SIZE")
 }
 
 func (p *ASDEXPane) commitDbAreaBrightnessSpinner(spinner *DcbSpinner) {
@@ -1829,6 +1781,14 @@ func (p *ASDEXPane) incrementActiveDcbSpinner(delta int) {
 
 		p.setRangeSettingForWindow(windowID, next)
 		spinner.Value = next
+	case DcbSpinnerDbAreaCharSize:
+		next := clampInt(spinner.Value+delta, 1, 6)
+		if next != spinner.Value {
+			spinner.Value = next
+			p.updateDataBlockAreaTraitsByID(spinner.WindowID, spinner.AreaID, func(t *DataBlockAreaTraits) {
+				t.FontSize = next
+			})
+		}
 	case DcbSpinnerDbAreaBrightness:
 		next := clampInt(spinner.Value+delta, brightnessFloorDefault, brightnessMax)
 		if next != spinner.Value {

@@ -318,39 +318,31 @@ func NewRangeDcbSpinner(windowID ScopeWindowID, currentRange int) *DcbSpinner {
 	}
 }
 
-func NewDbAreaDcbSpinner(
-	spinnerType DcbSpinnerType,
-	function DcbFunction,
+func NewDbAreaCharSizeSpinner(
 	windowID ScopeWindowID,
 	areaID string,
-	editMode DataBlockAreaEditMode,
-	title string,
-	min int,
-	max int,
-	currentValue int,
+	returnMenu DcbMenu,
+	current int,
 ) *DcbSpinner {
-	currentValue = clampInt(currentValue, min, max)
-	returnMenu := dbAreaEditMenu(editMode)
-	returnLines := dbAreaEditCommandLines(editMode)
-	input := strconv.Itoa(currentValue)
+	returnMenu, returnLines := dbAreaEditReturnContext(returnMenu)
+	current = clampInt(current, 1, 6)
 	return &DcbSpinner{
-		Type:           spinnerType,
-		Function:       function,
+		Type:           DcbSpinnerDbAreaCharSize,
+		Function:       DcbFunctionDbAreaDataBlockCharSize,
 		WindowID:       windowID,
 		AreaID:         areaID,
-		DbAreaEditMode: editMode,
 		ReturnMenu:     returnMenu,
 		ReturnLines:    returnLines,
-		Title:          title,
-		Lines:          append(append([]string(nil), returnLines...), title),
-		Min:            min,
-		Max:            max,
+		Title:          "CHAR SIZE",
+		Lines:          append(append([]string(nil), returnLines...), "CHAR SIZE", "DATA BLOCK"),
+		Min:            1,
+		Max:            6,
 		Step:           1,
-		Value:          currentValue,
-		Original:       currentValue,
-		MaxInputDigits: 3,
-		input:          input,
-		cursor:         len(input),
+		Value:          current,
+		Original:       current,
+		MaxInputDigits: 5,
+		input:          "",
+		cursor:         0,
 	}
 }
 
