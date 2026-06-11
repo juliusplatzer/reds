@@ -850,6 +850,12 @@ func (p *ASDEXPane) dcbState() DcbState {
 		LeaderLength:           active.DB.LeaderLength,
 		DataBlocksOn:           active.DB.ShowDataBlocks,
 		DcbOn:                  p.dcb.On(),
+		RotationDeg:            int(normalizeRotation(active.View.Rotation)),
+		ShowHistory:            true,
+		HistoryLength:          7,
+		ShowCoastList:          p.showCoastList,
+		CursorSpeed:            1,
+		CursorHome:             false,
 		FullDataBlocks:         active.DB.FullDataBlocks,
 		ShowAltitude:           fields.ShowAltitude,
 		ShowTargetType:         fields.ShowTargetType,
@@ -963,6 +969,11 @@ func (p *ASDEXPane) activateDcbHit(_ *panes.Context, hit DcbHit) bool {
 		p.startBrightnessSpinner(hit.Function)
 		return true
 	}
+	if p.dcb.Menu() == DcbMenuTools && isToolsPlaceholderFunction(hit.Function) {
+		p.previewArea.SetSystemResponse("")
+		p.clearHighlightedTarget()
+		return true
+	}
 
 	switch hit.Function {
 	case DcbFunctionRange:
@@ -989,6 +1000,9 @@ func (p *ASDEXPane) activateDcbHit(_ *panes.Context, hit DcbHit) bool {
 		return true
 	case DcbFunctionBrightness:
 		p.openBrightnessMenu()
+		return true
+	case DcbFunctionTools:
+		p.openToolsMenu()
 		return true
 	case DcbFunctionDefineDbTraitArea:
 		p.startDefineDbTraitArea()
@@ -1285,6 +1299,46 @@ func (p *ASDEXPane) openBrightnessMenu() {
 	p.dcbMenuCommand = NewDcbMenuCommand("BRITE")
 	p.previewArea.SetSystemResponse("")
 	p.clearHighlightedTarget()
+}
+
+func (p *ASDEXPane) openToolsMenu() {
+	if p == nil {
+		return
+	}
+
+	p.clearDcbModalConflicts()
+	p.dcb.SetMenu(DcbMenuTools)
+	p.dcbMenuCommand = NewDcbMenuCommand("TOOLS")
+	p.previewArea.SetSystemResponse("")
+	p.clearHighlightedTarget()
+}
+
+func isToolsPlaceholderFunction(function DcbFunction) bool {
+	switch function {
+	case DcbFunctionRange,
+		DcbFunctionMapReposition,
+		DcbFunctionRotate,
+		DcbFunctionNewWindow,
+		DcbFunctionResizeWindow,
+		DcbFunctionDeleteWindow,
+		DcbFunctionWindowReposition,
+		DcbFunctionHistoryOnOff,
+		DcbFunctionHistory,
+		DcbFunctionCoastOnOff,
+		DcbFunctionCoastReposition,
+		DcbFunctionPreviewReposition,
+		DcbFunctionCursorSpeed,
+		DcbFunctionCursorHomeOnOff,
+		DcbFunctionDcbTop,
+		DcbFunctionDcbLeft,
+		DcbFunctionDcbRight,
+		DcbFunctionDcbBottom,
+		DcbFunctionChangePassword,
+		DcbFunctionPlayBack:
+		return true
+	default:
+		return false
+	}
 }
 
 func (p *ASDEXPane) startBrightnessSpinner(function DcbFunction) {
