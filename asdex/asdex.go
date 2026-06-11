@@ -1421,7 +1421,8 @@ func (p *ASDEXPane) updateSelectedDataBlockAreaTraits(
 		return false
 	}
 
-	state := p.displayStateForWindow(p.activeWindowID())
+	windowID := p.activeWindowID()
+	state := p.displayStateForWindow(windowID)
 	area, ok := state.selectedDataBlockArea()
 	if !ok || area.Traits.DataBlocksOff {
 		p.previewArea.SetSystemResponse("")
@@ -1429,6 +1430,7 @@ func (p *ASDEXPane) updateSelectedDataBlockAreaTraits(
 	}
 
 	update(&area.Traits)
+	p.clearTraitLeaderOverridesForArea(windowID, area.ID)
 	p.previewArea.SetSystemResponse("")
 	return true
 }
@@ -1450,6 +1452,7 @@ func (p *ASDEXPane) updateDataBlockAreaTraitsByID(
 		}
 
 		update(&area.Traits)
+		p.clearTraitLeaderOverridesForArea(windowID, areaID)
 		return true
 	}
 	return false
@@ -2116,6 +2119,25 @@ func (p *ASDEXPane) applyManualLeaderOverrides(
 	return settings
 }
 
+func (p *ASDEXPane) applyTraitAreaManualLeaderOverrides(
+	settings DataBlockSettings,
+	windowID ScopeWindowID,
+	targetID string,
+) DataBlockSettings {
+	if p == nil || targetID == "" {
+		return settings
+	}
+
+	if direction, ok := p.traitLeaderDirectionOverride(windowID, targetID); ok {
+		settings.LeaderDirection = direction
+	}
+	if length, ok := p.traitLeaderLengthOverride(windowID, targetID); ok {
+		settings.LeaderLength = length
+	}
+
+	return settings
+}
+
 func (p *ASDEXPane) resolveDataBlockSettings(
 	target *Target,
 	windowID ScopeWindowID,
@@ -2134,12 +2156,25 @@ func (p *ASDEXPane) resolveDataBlockSettings(
 
 	if target != nil {
 		// Datablock setting priority follows CRC: active window defaults,
-		// global DB field toggles, manual per-target leader overrides, then
-		// DB area traits while the target is inside the area.
+		// global DB field toggles, regular per-target leader overrides, DB
+		// area traits, then manual overrides made while already inside a DB
+		// TRAIT AREA.
 		settings = p.applyManualLeaderOverrides(settings, windowID, target.ID)
 
-		if area, ok := p.dataBlockAreaForPoint(windowID, target.PosFeet); ok {
+		area, hasArea := p.dataBlockAreaForPoint(windowID, target.PosFeet)
+		traitArea, hasTraitArea := p.dataBlockTraitAreaForPoint(windowID, target.PosFeet)
+
+		currentTraitAreaID := ""
+		if hasTraitArea {
+			currentTraitAreaID = traitArea.ID
+		}
+		p.syncTargetTraitAreaContext(windowID, target.ID, currentTraitAreaID)
+
+		if hasArea {
 			settings = applyDataBlockAreaTraits(settings, area.Traits)
+		}
+		if hasTraitArea {
+			settings = p.applyTraitAreaManualLeaderOverrides(settings, windowID, target.ID)
 		}
 	}
 
@@ -2164,6 +2199,166 @@ func (p *ASDEXPane) targetShowsDataBlockForRender(
 	}
 
 	return p.targetShowsDataBlockInWindow(target, windowID, settings)
+}
+
+func (p *ASDEXPane) syncTargetTraitAreaContext(
+	windowID ScopeWindowID,
+	targetID string,
+	areaID string,
+) {
+	if p == nil || targetID == "" {
+		return
+	}
+
+	state := p.displayStateForWindow(windowID)
+	previous := ""
+	if state.TargetTraitAreaByTarget != nil {
+		previous = state.TargetTraitAreaByTarget[targetID]
+	}
+	if previous == areaID {
+		return
+	}
+
+	if state.TraitLeaderDirectionOverrides != nil {
+		delete(state.TraitLeaderDirectionOverrides, targetID)
+	}
+	if state.TraitLeaderLengthOverrides != nil {
+		delete(state.TraitLeaderLengthOverrides, targetID)
+	}
+
+	if areaID == "" {
+		if state.TargetTraitAreaByTarget != nil {
+			delete(state.TargetTraitAreaByTarget, targetID)
+		}
+		return
+	}
+
+	if state.TargetTraitAreaByTarget == nil {
+		state.TargetTraitAreaByTarget = make(map[string]string)
+	}
+	state.TargetTraitAreaByTarget[targetID] = areaID
+}
+
+func (p *ASDEXPane) clearTraitLeaderOverridesForArea(
+	windowID ScopeWindowID,
+	areaID string,
+) {
+	if p == nil || areaID == "" {
+		return
+	}
+
+	state := p.displayStateForWindow(windowID)
+	if state.TargetTraitAreaByTarget == nil {
+		return
+	}
+
+	for targetID, currentAreaID := range state.TargetTraitAreaByTarget {
+		if currentAreaID != areaID {
+			continue
+		}
+		if state.TraitLeaderDirectionOverrides != nil {
+			delete(state.TraitLeaderDirectionOverrides, targetID)
+		}
+		if state.TraitLeaderLengthOverrides != nil {
+			delete(state.TraitLeaderLengthOverrides, targetID)
+		}
+	}
+}
+
+func (p *ASDEXPane) traitLeaderDirectionOverride(
+	windowID ScopeWindowID,
+	targetID string,
+) (LeaderDirection, bool) {
+	if p == nil || targetID == "" {
+		return LeaderNE, false
+	}
+
+	state := p.displayStateForWindow(windowID)
+	value, ok := state.TraitLeaderDirectionOverrides[targetID]
+	return value, ok
+}
+
+func (p *ASDEXPane) setTraitLeaderDirectionOverride(
+	windowID ScopeWindowID,
+	targetID string,
+	value LeaderDirection,
+) {
+	if p == nil || targetID == "" {
+		return
+	}
+
+	state := p.displayStateForWindow(windowID)
+	if state.TraitLeaderDirectionOverrides == nil {
+		state.TraitLeaderDirectionOverrides = make(map[string]LeaderDirection)
+	}
+	state.TraitLeaderDirectionOverrides[targetID] = value
+}
+
+func (p *ASDEXPane) traitLeaderLengthOverride(
+	windowID ScopeWindowID,
+	targetID string,
+) (int, bool) {
+	if p == nil || targetID == "" {
+		return 0, false
+	}
+
+	state := p.displayStateForWindow(windowID)
+	value, ok := state.TraitLeaderLengthOverrides[targetID]
+	return value, ok
+}
+
+func (p *ASDEXPane) setTraitLeaderLengthOverride(
+	windowID ScopeWindowID,
+	targetID string,
+	value int,
+) {
+	if p == nil || targetID == "" {
+		return
+	}
+
+	state := p.displayStateForWindow(windowID)
+	if state.TraitLeaderLengthOverrides == nil {
+		state.TraitLeaderLengthOverrides = make(map[string]int)
+	}
+	state.TraitLeaderLengthOverrides[targetID] = value
+}
+
+func (p *ASDEXPane) setTargetLeaderDirectionManualOverride(
+	windowID ScopeWindowID,
+	target *Target,
+	value LeaderDirection,
+) {
+	if p == nil || target == nil || target.ID == "" {
+		return
+	}
+
+	if area, ok := p.dataBlockTraitAreaForPoint(windowID, target.PosFeet); ok {
+		p.syncTargetTraitAreaContext(windowID, target.ID, area.ID)
+		p.setTraitLeaderDirectionOverride(windowID, target.ID, value)
+		return
+	}
+
+	p.syncTargetTraitAreaContext(windowID, target.ID, "")
+	p.setLeaderDirectionOverride(windowID, target.ID, value)
+}
+
+func (p *ASDEXPane) setTargetLeaderLengthManualOverride(
+	windowID ScopeWindowID,
+	target *Target,
+	value int,
+) {
+	if p == nil || target == nil || target.ID == "" {
+		return
+	}
+
+	if area, ok := p.dataBlockTraitAreaForPoint(windowID, target.PosFeet); ok {
+		p.syncTargetTraitAreaContext(windowID, target.ID, area.ID)
+		p.setTraitLeaderLengthOverride(windowID, target.ID, value)
+		return
+	}
+
+	p.syncTargetTraitAreaContext(windowID, target.ID, "")
+	p.setLeaderLengthOverride(windowID, target.ID, value)
 }
 
 func (p *ASDEXPane) leaderDirectionOverride(

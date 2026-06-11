@@ -639,7 +639,11 @@ func (ap *ASDEXPane) cmdLeaderDirectionSlew(
 		return commandOutputClearAll("INVALID ENTRY")
 	}
 
-	ap.setLeaderDirectionOverride(ap.activeWindowID(), target.ID, input.Direction)
+	ap.setTargetLeaderDirectionManualOverride(
+		ap.activeWindowID(),
+		target,
+		input.Direction,
+	)
 
 	return CommandStatus{
 		Clear:     ClearAll,
@@ -687,7 +691,11 @@ func (ap *ASDEXPane) cmdLeaderLengthSlew(
 		return commandOutputClearAll("INVALID LNG")
 	}
 
-	ap.setLeaderLengthOverride(ap.activeWindowID(), target.ID, input.Value)
+	ap.setTargetLeaderLengthManualOverride(
+		ap.activeWindowID(),
+		target,
+		input.Value,
+	)
 
 	return CommandStatus{
 		Clear:     ClearAll,

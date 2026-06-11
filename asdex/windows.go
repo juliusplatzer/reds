@@ -42,6 +42,13 @@ type WindowDisplayState struct {
 	LeaderDirectionOverrides map[string]LeaderDirection
 	LeaderLengthOverrides    map[string]int
 
+	// Manual LDR DIR / LDR LNG changes made while a target is inside a DB
+	// TRAIT AREA. These override the area traits only while the target remains
+	// in that trait area.
+	TraitLeaderDirectionOverrides map[string]LeaderDirection
+	TraitLeaderLengthOverrides    map[string]int
+	TargetTraitAreaByTarget       map[string]string
+
 	DataBlockAreas   []DataBlockArea
 	NextDBAreaID     int
 	SelectedDBAreaID string
