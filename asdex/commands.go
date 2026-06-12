@@ -968,6 +968,7 @@ func (ap *ASDEXPane) applyCommandStatus(status CommandStatus) {
 		ap.coastListReposition = nil
 		ap.mapReposition = nil
 		ap.mapRotate = nil
+		ap.towerReadout = nil
 		ap.dcbSpinner = nil
 		ap.dcbMenuCommand = nil
 		ap.dbAreaDraft = nil
@@ -1002,7 +1003,9 @@ func (ap *ASDEXPane) consumeOpsHotkeys(
 	}
 	if ap.dbAreaDraft != nil || ap.dbAreaSelection != nil || ap.tempAreaDraft != nil ||
 		ap.tempTextCommand != nil || ap.tempTextPlacement != nil ||
-		ap.tempDataSelectMode != TempDataSelectNone || ap.newWindow != nil {
+		ap.tempDataSelectMode != TempDataSelectNone || ap.newWindow != nil ||
+		ap.deleteWindow != nil || ap.windowReposition != nil || ap.resizeWindow != nil ||
+		ap.towerReadout != nil {
 		return false
 	}
 	if ap.commandMode != CommandModeNone {

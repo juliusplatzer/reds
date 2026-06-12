@@ -425,6 +425,7 @@ func (ap *ASDEXPane) cmdMultiFunction(_ *panes.Context) CommandStatus {
 	ap.coastListReposition = nil
 	ap.mapReposition = nil
 	ap.mapRotate = nil
+	ap.towerReadout = nil
 	ap.dcbSpinner = nil
 	ap.dcbMenuCommand = nil
 	ap.dbAreaDraft = nil
@@ -464,6 +465,7 @@ func (ap *ASDEXPane) cmdMapReposition(ctx *panes.Context) CommandStatus {
 	ap.previewReposition = nil
 	ap.coastListReposition = nil
 	ap.mapRotate = nil
+	ap.towerReadout = nil
 	ap.dcbSpinner = nil
 	ap.dcbMenuCommand = nil
 	ap.dbAreaDraft = nil
