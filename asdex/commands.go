@@ -20,6 +20,7 @@ const (
 	CommandModeNone CommandMode = iota
 	CommandModeEditDatablockFields
 	CommandModeTrackSuspend
+	CommandModeTrackAlertInhibit
 	CommandModeInitiateControl
 	CommandModeTerminateControl
 	CommandModeMultiFunction
@@ -995,12 +996,6 @@ func (ap *ASDEXPane) consumeOpsHotkeys(
 	if ap == nil || ctx == nil || ctx.Keyboard == nil || ap.datablockEdit != nil {
 		return false
 	}
-	if ctx.Keyboard.WasPressed(platform.KeyF12) &&
-		ap.auralAlerts != nil &&
-		ap.auralAlerts.IsPlaying() {
-		ap.auralAlerts.Stop()
-		return true
-	}
 	if ap.dbAreaDraft != nil || ap.dbAreaSelection != nil || ap.tempAreaDraft != nil ||
 		ap.tempTextCommand != nil || ap.tempTextPlacement != nil ||
 		ap.tempDataSelectMode != TempDataSelectNone || ap.newWindow != nil ||
@@ -1031,6 +1026,8 @@ func (ap *ASDEXPane) consumeOpsHotkeys(
 		command = "[MAP THEME]"
 	case ctx.Keyboard.WasPressed(platform.KeyF11):
 		command = "[NEW WINDOW]"
+	case ctx.Keyboard.WasPressed(platform.KeyF12):
+		command = "[TRK ALERT INHIB]"
 	case towerReadoutShortcutPressed(ctx):
 		command = "[TWR RDOUT]"
 	default:
@@ -1126,6 +1123,9 @@ func (ap *ASDEXPane) consumeCommandClicksInWindow(
 			switch ap.commandMode {
 			case CommandModeTrackSuspend:
 				ap.applyCommandStatus(commandOutputClearAll("NO SLEW"))
+				return true
+			case CommandModeTrackAlertInhibit:
+				ap.finishTrackAlertInhibitCommand("NO SLEW")
 				return true
 			case CommandModeInitiateControl:
 				ap.initControlEntry = nil

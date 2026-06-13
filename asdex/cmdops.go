@@ -62,6 +62,22 @@ func registerOpsCommands() {
 			return ap.cmdTrackSuspendSlew(ctx, target)
 		},
 	)
+
+	registerCommand(
+		CommandModeNone,
+		"[TRK ALERT INHIB]",
+		func(ap *ASDEXPane, ctx *panes.Context) CommandStatus {
+			return ap.cmdTrackAlertInhibit(ctx)
+		},
+	)
+
+	registerCommand(
+		CommandModeTrackAlertInhibit,
+		"[SLEW]",
+		func(ap *ASDEXPane, ctx *panes.Context, target *Target) CommandStatus {
+			return ap.cmdTrackAlertInhibitSlew(ctx, target)
+		},
+	)
 }
 
 func (ap *ASDEXPane) cmdTrackSuspend(_ *panes.Context) CommandStatus {
@@ -138,6 +154,96 @@ func (ap *ASDEXPane) cmdTrackSuspendSlew(
 		Output:    "",
 		HasOutput: true,
 	}
+}
+
+func (ap *ASDEXPane) cmdTrackAlertInhibit(_ *panes.Context) CommandStatus {
+	if ap == nil {
+		return CommandStatus{}
+	}
+
+	ap.commandMode = CommandModeTrackAlertInhibit
+	ap.commandEntry.Clear()
+	ap.datablockEdit = nil
+	ap.editingTargetID = ""
+	ap.initControlEntry = nil
+	ap.termControlEntry = nil
+	ap.multiFunction = nil
+	ap.previewReposition = nil
+	ap.coastListReposition = nil
+	ap.mapReposition = nil
+	ap.mapRotate = nil
+	ap.towerReadout = nil
+	ap.dcbSpinner = nil
+	ap.dcbMenuCommand = nil
+	ap.dbAreaDraft = nil
+	ap.dbAreaSelection = nil
+	ap.tempAreaDraft = nil
+	ap.tempTextCommand = nil
+	ap.tempTextPlacement = nil
+	ap.tempDataSelectMode = TempDataSelectNone
+	ap.hoveredTempData = TempDataHit{Type: TempDataHitNone, Index: -1}
+	ap.tempData.ClearHighlights()
+	ap.newWindow = nil
+	ap.deleteWindow = nil
+	ap.windowReposition = nil
+	ap.resizeWindow = nil
+	ap.dcb.SetMenu(DcbMenuSafetyLogic)
+	ap.clearHighlightedTarget()
+	ap.previewArea.SetSystemResponse("")
+
+	return CommandStatus{Clear: ClearNone}
+}
+
+func (ap *ASDEXPane) cmdTrackAlertInhibitSlew(
+	_ *panes.Context,
+	target *Target,
+) CommandStatus {
+	if ap == nil {
+		return CommandStatus{Clear: ClearAll}
+	}
+	if target == nil {
+		return CommandStatus{
+			Clear:     ClearAll,
+			Output:    "NO SLEW",
+			HasOutput: true,
+		}
+	}
+	if target.Suspended || target.Coasting || target.Dropped {
+		return CommandStatus{Clear: ClearAll}
+	}
+	if !targetCanHaveDataBlock(target) {
+		return CommandStatus{Clear: ClearAll}
+	}
+
+	ap.targets.ToggleAlertsInhibited(target.ID)
+	if ap.targets.AlertsInhibited(target.ID) {
+		ap.alertRepository.DeleteForAircraft(target.ID)
+		if ap.auralAlerts != nil && !ap.alertRepository.AlertInProgress() {
+			ap.auralAlerts.Stop()
+		}
+	}
+	ap.previewArea.SetTrackAlertsInhibited(ap.targets.AnyAlertsInhibited())
+
+	ap.finishTrackAlertInhibitCommand("")
+
+	return CommandStatus{
+		Clear:     ClearNone,
+		Output:    "",
+		HasOutput: true,
+	}
+}
+
+func (ap *ASDEXPane) finishTrackAlertInhibitCommand(response string) {
+	if ap == nil {
+		return
+	}
+
+	ap.commandMode = CommandModeNone
+	ap.commandEntry.Clear()
+	ap.dcb.SetMenu(DcbMenuSafetyLogic)
+	ap.dcbMenuCommand = NewDcbMenuCommand("SAFETY LOGIC")
+	ap.previewArea.SetSystemResponse(response)
+	ap.clearHighlightedTarget()
 }
 
 func commandOutputClearAll(text string) CommandStatus {
