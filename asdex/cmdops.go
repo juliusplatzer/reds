@@ -161,6 +161,24 @@ func (ap *ASDEXPane) cmdTrackAlertInhibit(_ *panes.Context) CommandStatus {
 		return CommandStatus{}
 	}
 
+	returnMenu := ap.dcb.Menu()
+	var returnLines []string
+	if ap.dcbMenuCommand != nil {
+		returnLines = ap.dcbMenuCommand.DisplayLines()
+	}
+
+	return ap.startTrackAlertInhibitCommand(returnMenu, returnLines, false)
+}
+
+func (ap *ASDEXPane) startTrackAlertInhibitCommand(
+	returnMenu DcbMenu,
+	returnLines []string,
+	changeDcbMenu bool,
+) CommandStatus {
+	if ap == nil {
+		return CommandStatus{}
+	}
+
 	ap.commandMode = CommandModeTrackAlertInhibit
 	ap.commandEntry.Clear()
 	ap.datablockEdit = nil
@@ -187,7 +205,16 @@ func (ap *ASDEXPane) cmdTrackAlertInhibit(_ *panes.Context) CommandStatus {
 	ap.deleteWindow = nil
 	ap.windowReposition = nil
 	ap.resizeWindow = nil
-	ap.dcb.SetMenu(DcbMenuSafetyLogic)
+
+	ap.trackAlertInhibitReturnMenu = returnMenu
+	ap.trackAlertInhibitReturnLines = append([]string(nil), returnLines...)
+	ap.trackAlertInhibitHasReturnState = true
+	ap.dcbMenuCommand = nil
+
+	if changeDcbMenu {
+		ap.dcb.SetMenu(returnMenu)
+	}
+
 	ap.clearHighlightedTarget()
 	ap.previewArea.SetSystemResponse("")
 
@@ -202,17 +229,20 @@ func (ap *ASDEXPane) cmdTrackAlertInhibitSlew(
 		return CommandStatus{Clear: ClearAll}
 	}
 	if target == nil {
+		ap.finishTrackAlertInhibitCommand("NO SLEW")
 		return CommandStatus{
-			Clear:     ClearAll,
+			Clear:     ClearNone,
 			Output:    "NO SLEW",
 			HasOutput: true,
 		}
 	}
 	if target.Suspended || target.Coasting || target.Dropped {
-		return CommandStatus{Clear: ClearAll}
+		ap.finishTrackAlertInhibitCommand("")
+		return CommandStatus{Clear: ClearNone}
 	}
 	if !targetCanHaveDataBlock(target) {
-		return CommandStatus{Clear: ClearAll}
+		ap.finishTrackAlertInhibitCommand("")
+		return CommandStatus{Clear: ClearNone}
 	}
 
 	ap.targets.ToggleAlertsInhibited(target.ID)
@@ -240,10 +270,33 @@ func (ap *ASDEXPane) finishTrackAlertInhibitCommand(response string) {
 
 	ap.commandMode = CommandModeNone
 	ap.commandEntry.Clear()
-	ap.dcb.SetMenu(DcbMenuSafetyLogic)
-	ap.dcbMenuCommand = NewDcbMenuCommand("SAFETY LOGIC")
+
+	returnMenu := ap.trackAlertInhibitReturnMenu
+	returnLines := append([]string(nil), ap.trackAlertInhibitReturnLines...)
+	hasReturn := ap.trackAlertInhibitHasReturnState
+	ap.clearTrackAlertInhibitReturnContext()
+
+	if hasReturn {
+		ap.dcb.SetMenu(returnMenu)
+		if len(returnLines) > 0 {
+			ap.dcbMenuCommand = NewDcbMenuCommand(returnLines...)
+		} else {
+			ap.dcbMenuCommand = nil
+		}
+	}
+
 	ap.previewArea.SetSystemResponse(response)
 	ap.clearHighlightedTarget()
+}
+
+func (ap *ASDEXPane) clearTrackAlertInhibitReturnContext() {
+	if ap == nil {
+		return
+	}
+
+	ap.trackAlertInhibitReturnMenu = DcbMenuMain
+	ap.trackAlertInhibitReturnLines = nil
+	ap.trackAlertInhibitHasReturnState = false
 }
 
 func commandOutputClearAll(text string) CommandStatus {

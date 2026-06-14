@@ -972,6 +972,7 @@ func (ap *ASDEXPane) applyCommandStatus(status CommandStatus) {
 		ap.towerReadout = nil
 		ap.dcbSpinner = nil
 		ap.dcbMenuCommand = nil
+		ap.clearTrackAlertInhibitReturnContext()
 		ap.dbAreaDraft = nil
 		ap.dbAreaSelection = nil
 		ap.tempAreaDraft = nil
@@ -996,11 +997,13 @@ func (ap *ASDEXPane) consumeOpsHotkeys(
 	if ap == nil || ctx == nil || ctx.Keyboard == nil || ap.datablockEdit != nil {
 		return false
 	}
+	f12Pressed := ctx.Keyboard.WasPressed(platform.KeyF12)
 	if ap.dbAreaDraft != nil || ap.dbAreaSelection != nil || ap.tempAreaDraft != nil ||
 		ap.tempTextCommand != nil || ap.tempTextPlacement != nil ||
 		ap.tempDataSelectMode != TempDataSelectNone || ap.newWindow != nil ||
 		ap.deleteWindow != nil || ap.windowReposition != nil || ap.resizeWindow != nil ||
-		ap.towerReadout != nil || ap.dcbSpinner != nil || ap.dcbMenuCommand != nil ||
+		ap.towerReadout != nil || ap.dcbSpinner != nil ||
+		(ap.dcbMenuCommand != nil && !f12Pressed) ||
 		!ap.commandEntry.Empty() {
 		return false
 	}
@@ -1026,7 +1029,7 @@ func (ap *ASDEXPane) consumeOpsHotkeys(
 		command = "[MAP THEME]"
 	case ctx.Keyboard.WasPressed(platform.KeyF11):
 		command = "[NEW WINDOW]"
-	case ctx.Keyboard.WasPressed(platform.KeyF12):
+	case f12Pressed:
 		command = "[TRK ALERT INHIB]"
 	case towerReadoutShortcutPressed(ctx):
 		command = "[TWR RDOUT]"

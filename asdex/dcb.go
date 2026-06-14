@@ -772,6 +772,8 @@ func isLargeDcbFunction(function DcbFunction) bool {
 		DcbFunctionSafetyLogic,
 		DcbFunctionTools,
 		DcbFunctionClosedRunway,
+		DcbFunctionRunwayConfig,
+		DcbFunctionTowerConfig,
 		DcbFunctionStoredGlobalTempData,
 		DcbFunctionDefineClosedArea,
 		DcbFunctionDefineRestrictedArea,
